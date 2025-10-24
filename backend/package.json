@@ -1,0 +1,24 @@
+{
+  "name": "task-manager-backend",
+  "version": "1.0.0",
+  "description": "Backend pro Task Manager aplikaci",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^9.2.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.9",
+    "sharp": "^0.34.4"
+  }
+}

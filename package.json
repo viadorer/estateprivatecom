@@ -1,0 +1,27 @@
+{
+  "name": "task-manager-monorepo",
+  "version": "1.0.0",
+  "description": "Full-stack Task Manager aplikace s React frontendem a Node.js backendem",
+  "private": true,
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm start",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build": "cd frontend && npm run build",
+    "clean": "rm -rf backend/node_modules frontend/node_modules backend/tasks.db"
+  },
+  "keywords": [
+    "task-manager",
+    "react",
+    "nodejs",
+    "express",
+    "sqlite",
+    "fullstack"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
