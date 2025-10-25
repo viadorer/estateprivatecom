@@ -95,15 +95,14 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
         className: 'custom-price-marker',
         html: `
           <div style="
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            background: white;
+            border: 1px solid #e5e7eb;
             border-radius: 12px;
             padding: 6px 12px;
             font-size: 12px;
             font-weight: 600;
-            color: #667eea;
-            box-shadow: 0 8px 32px rgba(102, 126, 234, 0.2);
+            color: #3182ce;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
             white-space: nowrap;
             cursor: pointer;
           ">
@@ -114,80 +113,134 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
         iconAnchor: [60, 15]
       })
 
-      // Vytvořit popup kartičku - glass morphism styl
+      const getTransactionLabel = (type) => {
+        return type === 'sale' ? 'Prodej' : 'Pronájem'
+      }
+
+      const getPropertyTypeLabel = (type) => {
+        const labels = {
+          'flat': 'Byt',
+          'house': 'Dům',
+          'land': 'Pozemek',
+          'commercial': 'Komerční'
+        }
+        return labels[type] || 'Nemovitost'
+      }
+
+      const getTransactionIconSVG = (type) => {
+        if (type === 'sale') {
+          return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><polyline points="17 5 12 1 7 5"></polyline><polyline points="7 19 12 23 17 19"></polyline></svg>'
+        } else {
+          return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'
+        }
+      }
+
+      const getPropertyIconSVG = (type) => {
+        switch(type) {
+          case 'flat':
+            return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/><path d="M3 9h18"/><path d="M3 15h18"/></svg>'
+          case 'house':
+            return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>'
+          case 'land':
+            return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 2v20"/><path d="M2 12h20"/></svg>'
+          case 'commercial':
+            return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>'
+          default:
+            return '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>'
+        }
+      }
+
+      // Vytvořit popup kartičku - minimalistický styl
       const popupContent = `
         <div style="
-          background: rgba(255, 255, 255, 0.95);
-          backdrop-filter: blur(20px);
-          border-radius: 16px;
-          padding: 20px;
-          min-width: 280px;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+          background: white;
+          border-radius: 12px;
+          padding: 16px;
+          min-width: 260px;
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+          border: 1px solid #e5e7eb;
         ">
           <h3 style="
-            margin: 0 0 12px 0;
-            font-size: 18px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            margin: 0 0 8px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #111827;
+            line-height: 1.3;
           ">
             ${property.title || 'Nemovitost'}
           </h3>
-          <div style="margin-bottom: 12px; color: #6b7280; font-size: 14px;">
+          <div style="
+            margin-bottom: 12px;
+            color: #6b7280;
+            font-size: 13px;
+          ">
             ${property.city}${property.district ? ', ' + property.district : ''}
           </div>
           <div style="
-            margin-bottom: 16px;
-            font-size: 24px;
+            margin-bottom: 12px;
+            font-size: 20px;
             font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #3182ce;
           ">
             ${new Intl.NumberFormat('cs-CZ').format(property.price)} Kč
           </div>
           <div style="
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-            margin-bottom: 16px;
-            font-size: 13px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 14px;
           ">
-            <div style="
-              background: rgba(102, 126, 234, 0.1);
-              padding: 8px;
-              border-radius: 8px;
-              text-align: center;
-            ">
-              <div style="color: #667eea; font-weight: 600;">${property.area} m²</div>
-              <div style="color: #9ca3af; font-size: 11px;">Plocha</div>
-            </div>
-            <div style="
-              background: rgba(102, 126, 234, 0.1);
-              padding: 8px;
-              border-radius: 8px;
-              text-align: center;
-            ">
-              <div style="color: #667eea; font-weight: 600;">${property.rooms}</div>
-              <div style="color: #9ca3af; font-size: 11px;">Pokoje</div>
-            </div>
+            <span style="
+              background: ${property.transaction_type === 'sale' ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'};
+              color: white;
+              padding: 4px 8px;
+              border-radius: 12px;
+              font-size: 11px;
+              font-weight: 500;
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+            ">${getTransactionIconSVG(property.transaction_type)} ${getTransactionLabel(property.transaction_type)}</span>
+            <span style="
+              background: #e0e7ff;
+              color: #4338ca;
+              padding: 4px 8px;
+              border-radius: 12px;
+              font-size: 11px;
+              font-weight: 500;
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+            ">${getPropertyIconSVG(property.property_type)} ${getPropertyTypeLabel(property.property_type)}</span>
+            <span style="
+              background: #dbeafe;
+              color: #1e40af;
+              padding: 4px 8px;
+              border-radius: 12px;
+              font-size: 11px;
+              font-weight: 500;
+            ">${property.area} m²</span>
+            ${property.rooms ? `<span style="
+              background: #d1fae5;
+              color: #065f46;
+              padding: 4px 8px;
+              border-radius: 12px;
+              font-size: 11px;
+              font-weight: 500;
+            ">${property.rooms} pok.</span>` : ''}
           </div>
           <button onclick="window.openPropertyDetail(${property.id})" style="
             width: 100%;
-            background: linear-gradient(135deg, rgba(102, 126, 234, 0.9) 0%, rgba(118, 75, 162, 0.9) 100%);
-            backdrop-filter: blur(10px);
+            background: #7c3aed;
             color: white;
             border: none;
-            border-radius: 12px;
-            padding: 12px 16px;
-            font-weight: 600;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-weight: 500;
             cursor: pointer;
-            font-size: 14px;
-            transition: all 0.3s;
-          " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 24px rgba(102, 126, 234, 0.4)'" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+            font-size: 13px;
+            transition: all 0.2s;
+          " onmouseover="this.style.background='#6d28d9'" onmouseout="this.style.background='#7c3aed'">
             Zobrazit detail
           </button>
         </div>
@@ -260,10 +313,23 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
       )}
 
       {/* Info o počtu nemovitostí */}
-      <div className="absolute bottom-4 left-4 glass-card px-4 py-2 z-10">
-        <div className="flex items-center gap-2 text-sm">
-          <MapPin className="w-4 h-4 text-primary-600" />
-          <span className="font-semibold">{properties.length} nemovitostí</span>
+      <div className="absolute bottom-4 left-4 z-10">
+        <div style={{
+          background: 'white',
+          borderRadius: '12px',
+          padding: '10px 16px',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+          border: '1px solid #e5e7eb',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <MapPin className="w-5 h-5" style={{ color: '#7c3aed' }} />
+          <span style={{
+            fontSize: '14px',
+            fontWeight: '600',
+            color: '#111827'
+          }}>{properties.length} nemovitostí</span>
         </div>
       </div>
     </div>
