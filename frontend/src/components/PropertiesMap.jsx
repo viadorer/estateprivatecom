@@ -279,39 +279,6 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
     <div className="relative w-full h-full">
       <div ref={mapRef} className="w-full h-full rounded-lg overflow-hidden" />
       
-      {/* Info popup při výběru nemovitosti */}
-      {selectedProperty && (
-        <div className="absolute top-4 right-4 glass-card p-4 max-w-sm z-10">
-          <div className="flex justify-between items-start mb-2">
-            <h3 className="font-bold text-gray-900">{selectedProperty.title}</h3>
-            <button
-              onClick={() => setSelectedProperty(null)}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="space-y-1 text-sm">
-            <div className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-primary-600" />
-              <span>{selectedProperty.city}</span>
-            </div>
-            <div className="font-bold text-primary-600">
-              {new Intl.NumberFormat('cs-CZ').format(selectedProperty.price)} Kč
-            </div>
-            <div className="text-gray-600">
-              {selectedProperty.area} m² • {selectedProperty.rooms} pokoje
-            </div>
-          </div>
-          <button
-            onClick={() => onPropertyClick && onPropertyClick(selectedProperty)}
-            className="mt-3 w-full glass-button rounded-full text-sm py-2"
-          >
-            Zobrazit detail
-          </button>
-        </div>
-      )}
-
       {/* Info o počtu nemovitostí */}
       <div className="absolute bottom-4 left-4 z-10">
         <div style={{

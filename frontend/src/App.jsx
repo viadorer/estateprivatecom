@@ -53,6 +53,7 @@ function App() {
   const [entityForContract, setEntityForContract] = useState(null)
   const [entityTypeForContract, setEntityTypeForContract] = useState(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [mapViewMode, setMapViewMode] = useState(null) // Pro uložení stavu mapy
 
   useEffect(() => {
     const savedUser = localStorage.getItem('currentUser')
@@ -623,6 +624,8 @@ function App() {
               <Properties 
                 properties={properties} 
                 currentUser={currentUser}
+                mapViewMode={mapViewMode}
+                setMapViewMode={setMapViewMode}
                 onAdd={() => { 
                   setSelectedProperty(null);
                   // Agent musí nejdřív podepsat prohlášení
@@ -878,11 +881,20 @@ function App() {
         <PropertyDetail 
           property={selectedProperty}
           currentUser={currentUser}
-          onClose={() => setShowPropertyDetail(false)}
+          onClose={() => {
+            setShowPropertyDetail(false)
+            // Pokud byl otevřen z mapy, obnovit mapu
+            if (mapViewMode === 'map') {
+              setMapViewMode(null)
+            }
+          }}
           onEdit={() => { setShowPropertyDetail(false); setShowPropertyModal(true); }}
           onToggleStatus={() => {
             handleTogglePropertyStatus(selectedProperty.id, selectedProperty.status)
             setShowPropertyDetail(false)
+            if (mapViewMode === 'map') {
+              setMapViewMode(null)
+            }
           }}
           onAddProperty={() => {
             setSelectedProperty(null)
@@ -1111,8 +1123,15 @@ function Dashboard({ stats, currentUser }) {
   )
 }
 
-function Properties({ properties, currentUser, onAdd, onEdit, onDelete, onToggleStatus, onViewDetail, onGenerateCode }) {
-  const [viewMode, setViewMode] = useState('grid') // grid, list, map
+function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAdd, onEdit, onDelete, onToggleStatus, onViewDetail, onGenerateCode }) {
+  const [viewMode, setViewMode] = useState('grid') // grid, list, map, hidden
+  
+  // Obnovit mapu po zavření detailu
+  useEffect(() => {
+    if (mapViewMode === null && viewMode === 'hidden') {
+      setViewMode('map')
+    }
+  }, [mapViewMode])
   const [filters, setFilters] = useState({
     transaction_type: '',
     property_type: '',
@@ -1453,8 +1472,16 @@ function Properties({ properties, currentUser, onAdd, onEdit, onDelete, onToggle
         <div className="h-[600px] rounded-lg overflow-hidden">
           <PropertiesMap 
             properties={filteredProperties}
-            onPropertyClick={(property) => onViewDetail(property)}
+            onPropertyClick={(property) => {
+              setMapViewMode('map')
+              setViewMode('hidden')
+              onViewDetail(property)
+            }}
           />
+        </div>
+      ) : viewMode === 'hidden' ? (
+        <div className="h-[600px] rounded-lg overflow-hidden flex items-center justify-center bg-gray-50">
+          <p className="text-gray-500">Detail nemovitosti</p>
         </div>
       ) : viewMode === 'grid' ? (
         <div className="properties-grid">
