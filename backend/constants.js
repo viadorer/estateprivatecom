@@ -9,7 +9,8 @@ export const PROPERTY_TYPES = {
   FLAT: 'flat',
   HOUSE: 'house',
   COMMERCIAL: 'commercial',
-  LAND: 'land'
+  LAND: 'land',
+  PROJECT: 'project'
 };
 
 export const FLAT_SUBTYPES = {
@@ -59,6 +60,13 @@ export const LAND_SUBTYPES = {
   ORCHARD: 'orchard',
   MEADOW: 'meadow',
   POND: 'pond',
+  OTHER: 'other'
+};
+
+export const PROJECT_SUBTYPES = {
+  RESIDENTIAL: 'residential',
+  COMMERCIAL: 'commercial',
+  MIXED: 'mixed',
   OTHER: 'other'
 };
 
@@ -117,6 +125,20 @@ export const USER_ROLES = {
   CLIENT: 'client'
 };
 
+export const CONTRACT_TYPES = {
+  LOI: 'loi',
+  BROKERAGE: 'brokerage',
+  COOPERATION_CLIENT: 'cooperation_client',
+  COOPERATION_CLIENT_COMMISSION: 'cooperation_client_commission',
+  COOPERATION_AGENT: 'cooperation_agent'
+};
+
+export const REGISTRATION_STATUS = {
+  PENDING: 'pending',
+  APPROVED: 'approved',
+  REJECTED: 'rejected'
+};
+
 export const PROPERTY_STATUS = {
   ACTIVE: 'active',
   RESERVED: 'reserved',
@@ -154,6 +176,7 @@ export const LABELS_CS = {
   house: 'Dům',
   commercial: 'Komerční',
   land: 'Pozemek',
+  project: 'Projekt',
   
   // Podtypy bytu
   '1+kk': '1+kk',
@@ -195,6 +218,10 @@ export const LABELS_CS = {
   orchard: 'Sad',
   meadow: 'Louka',
   pond: 'Rybník',
+  
+  // Podtypy projektu
+  residential: 'Bytový projekt',
+  mixed: 'Smíšený projekt',
   
   // Typ stavby
   brick: 'Cihlová',
@@ -240,6 +267,18 @@ export const LABELS_CS = {
   admin: 'Administrátor',
   agent: 'Realitní makléř',
   client: 'Klient',
+  
+  // Typy smluv
+  loi: 'Letter of Intent',
+  brokerage: 'Zprostředkovatelská smlouva',
+  cooperation_client: 'Smlouva o spolupráci - Klient',
+  cooperation_client_commission: 'Smlouva o spolupráci - Klient s provizí',
+  cooperation_agent: 'Smlouva o spolupráci - Agent',
+  
+  // Stavy registrace
+  pending: 'Čeká na schválení',
+  approved: 'Schváleno',
+  rejected: 'Zamítnuto',
   
   // Stavy
   active: 'Aktivní',

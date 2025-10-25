@@ -111,16 +111,13 @@ export default function PendingApprovalsPage({ currentUser }) {
   return (
     <div className="fade-in">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-4xl font-bold text-white mb-2 flex items-center gap-3">
-          <div className="icon-circle bg-amber-100 text-amber-600">
-            <Clock className="w-6 h-6" />
-          </div>
-          Čekající schválení
-        </h1>
-        <p className="text-white/70">
-          Celkem <strong>{totalPending}</strong> položek čeká na vaše schválení
-        </p>
+      <div className="glass-card mb-6 p-6">
+        <div>
+          <h3 className="text-2xl font-bold text-gray-900">Čekající schválení</h3>
+          <p className="text-sm text-gray-600 mt-1">
+            Celkem <strong>{totalPending}</strong> položek čeká na vaše schválení
+          </p>
+        </div>
       </div>
 
       {totalPending === 0 ? (
@@ -137,30 +134,32 @@ export default function PendingApprovalsPage({ currentUser }) {
         </div>
       ) : (
         <>
-          {/* Tabs */}
-          <div className="flex gap-3 mb-8">
-            <button
-              onClick={() => setActiveTab('properties')}
-              className={`flex items-center gap-2 px-6 py-3 rounded-full transition ${
-                activeTab === 'properties'
-                  ? 'glass-button'
-                  : 'glass-button-secondary'
-              }`}
-            >
-              <Building2 className="w-4 h-4" />
-              <span className="font-medium">Nemovitosti ({pendingProperties.length})</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('demands')}
-              className={`flex items-center gap-2 px-6 py-3 rounded-full transition ${
-                activeTab === 'demands'
-                  ? 'glass-button'
-                  : 'glass-button-secondary'
-              }`}
-            >
-              <Search className="w-4 h-4" />
-              <span className="font-medium">Poptávky ({pendingDemands.length})</span>
-            </button>
+          {/* Tabs - styl navigace */}
+          <div className="glass-card p-6 mb-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setActiveTab('properties')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+                  activeTab === 'properties'
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                    : 'hover:bg-white/30'
+                }`}
+              >
+                <Building2 className="w-5 h-5" />
+                <span>Nemovitosti ({pendingProperties.length})</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('demands')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+                  activeTab === 'demands'
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                    : 'hover:bg-white/30'
+                }`}
+              >
+                <Search className="w-5 h-5" />
+                <span>Poptávky ({pendingDemands.length})</span>
+              </button>
+            </div>
           </div>
 
           {/* Properties */}

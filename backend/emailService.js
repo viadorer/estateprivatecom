@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import db from './database.js';
 
 dotenv.config();
 
@@ -14,6 +15,73 @@ const createTransporter = () => {
       pass: process.env.EMAIL_PASSWORD || 'your-app-password'
     }
   });
+};
+
+// Nahrazení proměnných v šabloně
+const replaceVariables = (template, variables) => {
+  let result = template;
+  for (const [key, value] of Object.entries(variables)) {
+    const regex = new RegExp(`{{${key}}}`, 'g');
+    result = result.replace(regex, value || '');
+  }
+  return result;
+};
+
+// Odeslání emailu ze šablony
+const sendEmailFromTemplate = async (templateKey, recipientEmail, variables, userId = null) => {
+  try {
+    // Načíst šablonu z databáze
+    const template = db.prepare('SELECT * FROM email_templates WHERE template_key = ? AND is_active = 1').get(templateKey);
+    
+    if (!template) {
+      throw new Error(`Emailová šablona '${templateKey}' nebyla nalezena nebo není aktivní`);
+    }
+
+    // Nahradit proměnné v předmětu a obsahu
+    const subject = replaceVariables(template.subject, variables);
+    const htmlContent = replaceVariables(template.html_content, variables);
+
+    const transporter = createTransporter();
+
+    const mailOptions = {
+      from: {
+        name: 'Estate Private',
+        address: process.env.EMAIL_USER || 'info@ptf.cz'
+      },
+      to: recipientEmail,
+      subject: subject,
+      html: htmlContent
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Email odeslan (${templateKey}):`, info.messageId);
+
+    // Zaznamenat do audit logu
+    try {
+      db.prepare(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
+        VALUES (?, 'email_sent', 'email_template', ?, ?)
+      `).run(
+        userId,
+        template.id,
+        JSON.stringify({
+          template_key: templateKey,
+          recipient: recipientEmail,
+          subject: subject,
+          message_id: info.messageId,
+          variables: variables
+        })
+      );
+    } catch (logError) {
+      console.error('Chyba pri logovani emailu:', logError);
+      // Pokračujeme i když logování selže
+    }
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`Chyba pri odesilani emailu (${templateKey}):`, error);
+    throw error;
+  }
 };
 
 // Odeslání přístupového kódu emailem
@@ -136,7 +204,7 @@ const sendAccessCode = async (recipientEmail, recipientName, code, entityType, e
           <p>Pokud máte jakékoliv dotazy, neváhejte nás kontaktovat.</p>
           
           <p>S pozdravem,<br>
-          <strong>Tým Estateprivate.com</strong></p>
+          <strong>Tým Estate Private</strong></p>
         </div>
         
         <div class="footer">
@@ -166,7 +234,7 @@ Platnost: ${expirationText}
 BEZPEČNOST: Tento kód je určen pouze pro Vás. Nesdílejte ho s nikým dalším.
 
 S pozdravem,
-Tým Estateprivate.com
+Tým Estate Private
     `
   };
 
@@ -186,11 +254,11 @@ const sendWelcomeEmail = async (recipientEmail, recipientName, temporaryPassword
 
   const mailOptions = {
     from: {
-      name: 'Estateprivate.com',
+      name: 'Estate Private',
       address: process.env.EMAIL_USER || 'info@ptf.cz'
     },
     to: recipientEmail,
-    subject: '👋 Vítejte na Estateprivate.com',
+    subject: 'Vítejte na Estate Private',
     html: `
       <!DOCTYPE html>
       <html>
@@ -252,7 +320,7 @@ const sendWelcomeEmail = async (recipientEmail, recipientName, temporaryPassword
           <p><strong>⚠️ Důležité:</strong> Po prvním přihlášení si prosím změňte heslo.</p>
           
           <p>S pozdravem,<br>
-          <strong>Tým Estateprivate.com</strong></p>
+          <strong>Tým Estate Private</strong></p>
         </div>
         
         <div class="footer">
@@ -273,7 +341,50 @@ const sendWelcomeEmail = async (recipientEmail, recipientName, temporaryPassword
   }
 };
 
+// Obecná funkce pro odeslání emailu
+const sendEmail = async ({ to, subject, html, text }) => {
+  const transporter = createTransporter();
+
+  const mailOptions = {
+    from: {
+      name: 'PTF reality',
+      address: process.env.EMAIL_USER || 'info@ptf.cz'
+    },
+    to,
+    subject,
+    html,
+    text
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Email odeslán:', info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('❌ Chyba při odesílání emailu:', error);
+    throw error;
+  }
+};
+
+// Odeslání schvalovacího emailu s přístupovým kódem
+const sendRegistrationApproval = async (recipientEmail, recipientName, accessCode, contractType, userId = null) => {
+  const contractTypeText = {
+    'cooperation_client': 'Smlouva o spolupráci - Klient',
+    'cooperation_client_commission': 'Smlouva o spolupráci - Klient s provizí',
+    'cooperation_agent': 'Smlouva o spolupráci - Agent'
+  }[contractType] || 'Smlouva o spolupráci';
+
+  return sendEmailFromTemplate('registration_approval', recipientEmail, {
+    recipientName,
+    accessCode,
+    contractType: contractTypeText
+  }, userId);
+};
+
 export {
   sendAccessCode,
-  sendWelcomeEmail
+  sendWelcomeEmail,
+  sendEmail,
+  sendRegistrationApproval,
+  sendEmailFromTemplate
 };

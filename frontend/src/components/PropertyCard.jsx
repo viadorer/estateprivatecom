@@ -28,6 +28,10 @@ export default function PropertyCard({ property, currentUser, formatPrice, LABEL
     }
   }
 
+  const isMyProperty = property.agent_id === currentUser.id
+  const hasLOI = property.has_loi === 1
+  const hasContract = property.brokerage_contract_signed === 1
+
   return (
     <div className="glass-card hover:scale-105 transition-transform">
       <div className="relative mb-4 rounded-lg overflow-hidden">
@@ -38,6 +42,25 @@ export default function PropertyCard({ property, currentUser, formatPrice, LABEL
         />
         <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
           <span className="text-white font-bold text-lg">Náhled</span>
+        </div>
+        
+        {/* Badgy v pravém horním rohu */}
+        <div className="absolute top-2 right-2 flex flex-col gap-1">
+          {isMyProperty && (
+            <span className="badge bg-blue-500 text-white text-xs px-2 py-1 rounded-full shadow-lg">
+              Moje
+            </span>
+          )}
+          {hasLOI && !isMyProperty && (
+            <span className="badge bg-green-500 text-white text-xs px-2 py-1 rounded-full shadow-lg">
+              LOI
+            </span>
+          )}
+          {hasContract && (
+            <span className="badge bg-purple-500 text-white text-xs px-2 py-1 rounded-full shadow-lg">
+              Smlouva
+            </span>
+          )}
         </div>
       </div>
       

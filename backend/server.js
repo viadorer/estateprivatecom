@@ -7,8 +7,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import db from './database.js';
-import { sendAccessCode, sendWelcomeEmail } from './emailService.js';
+import { sendAccessCode, sendWelcomeEmail, sendEmail, sendRegistrationApproval } from './emailService.js';
 import { 
   notifyPropertyApproved, 
   notifyPropertyRejected, 
@@ -164,6 +165,237 @@ app.post('/api/auth/login', (req, res) => {
     logAction(user.id, 'login', 'user', user.id, `Přihlášení uživatele ${user.email}`, req);
     
     res.json(userWithoutPassword);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Registrace na waitlist
+app.post('/api/registration-requests', async (req, res) => {
+  try {
+    const {
+      name, surname, email, phone,
+      address_street, address_city, address_zip,
+      ico, dic, company, company_position,
+      requested_role, user_type, demand_description
+    } = req.body;
+
+    // Kontrola duplicit - email
+    const existingUserByEmail = db.prepare('SELECT id, name, email FROM users WHERE email = ?').get(email);
+    if (existingUserByEmail) {
+      return res.status(400).json({ 
+        error: 'Email je již registrován',
+        details: `Uživatel s emailem ${email} již existuje v systému (${existingUserByEmail.name})`
+      });
+    }
+
+    const existingRequestByEmail = db.prepare('SELECT id FROM registration_requests WHERE email = ? AND status = "pending"').get(email);
+    if (existingRequestByEmail) {
+      return res.status(400).json({ 
+        error: 'Žádost s tímto emailem již existuje',
+        details: 'Čeká na schválení administrátorem'
+      });
+    }
+
+    // Kontrola duplicit - telefon
+    if (phone) {
+      const existingUserByPhone = db.prepare('SELECT id, name, phone FROM users WHERE phone = ?').get(phone);
+      if (existingUserByPhone) {
+        return res.status(400).json({ 
+          error: 'Telefon je již registrován',
+          details: `Uživatel s telefonem ${phone} již existuje v systému (${existingUserByPhone.name})`
+        });
+      }
+
+      const existingRequestByPhone = db.prepare('SELECT id FROM registration_requests WHERE phone = ? AND status = "pending"').get(phone);
+      if (existingRequestByPhone) {
+        return res.status(400).json({ 
+          error: 'Žádost s tímto telefonem již existuje',
+          details: 'Čeká na schválení administrátorem'
+        });
+      }
+    }
+
+    // Kontrola duplicit - IČO (pouze pro agenty a firmy)
+    if (ico && requested_role === 'agent') {
+      const existingUserByIco = db.prepare('SELECT id, name, ico, company FROM users WHERE ico = ?').get(ico);
+      if (existingUserByIco) {
+        return res.status(400).json({ 
+          error: 'IČO je již registrováno',
+          details: `Společnost s IČO ${ico} již existuje v systému (${existingUserByIco.company || existingUserByIco.name})`
+        });
+      }
+
+      const existingRequestByIco = db.prepare('SELECT id FROM registration_requests WHERE ico = ? AND status = "pending"').get(ico);
+      if (existingRequestByIco) {
+        return res.status(400).json({ 
+          error: 'Žádost s tímto IČO již existuje',
+          details: 'Čeká na schválení administrátorem'
+        });
+      }
+    }
+
+    // Vložení registrační žádosti
+    const result = db.prepare(`
+      INSERT INTO registration_requests (
+        name, surname, email, phone,
+        address_street, address_city, address_zip,
+        ico, dic, company, company_position,
+        requested_role, user_type, demand_description,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `).run(
+      name, surname, email, phone,
+      address_street, address_city, address_zip,
+      ico, dic, company, company_position,
+      requested_role, user_type, demand_description
+    );
+
+    // Vytvořit uživatele jako neaktivního (bez hesla)
+    const fullName = `${name} ${surname}`;
+    const userResult = db.prepare(`
+      INSERT INTO users (
+        name, email, phone,
+        address_street, address_city, address_zip,
+        ico, dic, company, company_position,
+        role, is_active, password
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')
+    `).run(
+      fullName, email, phone,
+      address_street, address_city, address_zip,
+      ico, dic, company, company_position,
+      requested_role
+    );
+
+    // TODO: Odeslat email na info@ptf.cz
+    // Zde bude implementace emailu s informacemi o nové registraci
+    
+    console.log(`Nová registrace: ${name} ${surname} (${email}) - ${requested_role}`);
+    console.log(`Vytvořen neaktivní uživatel ID: ${userResult.lastInsertRowid}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Registrace byla úspěšně odeslána',
+      id: result.lastInsertRowid,
+      user_id: userResult.lastInsertRowid
+    });
+  } catch (error) {
+    console.error('Chyba při registraci:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Získat všechny registrační žádosti (pouze admin)
+app.get('/api/registration-requests', (req, res) => {
+  try {
+    const requests = db.prepare(`
+      SELECT r.*, u.name as approved_by_name
+      FROM registration_requests r
+      LEFT JOIN users u ON r.approved_by = u.id
+      ORDER BY r.created_at DESC
+    `).all();
+    
+    res.json(requests);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Schválit registraci
+app.post('/api/registration-requests/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { contract_type, commission_rate, commission_terms, admin_notes, approved_by } = req.body;
+
+    const request = db.prepare('SELECT * FROM registration_requests WHERE id = ?').get(id);
+    if (!request) {
+      return res.status(404).json({ error: 'Registrace nenalezena' });
+    }
+
+    if (request.status === 'approved') {
+      return res.status(400).json({ error: 'Registrace již byla schválena' });
+    }
+
+    // Najít existujícího uživatele (vytvořeného při registraci)
+    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(request.email);
+    if (!existingUser) {
+      return res.status(404).json({ error: 'Uživatel nebyl nalezen. Nejdřív musí být vytvořen při registraci.' });
+    }
+
+    const userId = existingUser.id;
+
+    // Vygenerovat přístupový kód pro smlouvu a dočasné heslo
+    const accessCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const hashedPassword = await bcrypt.hash(accessCode, 10);
+
+    // Nastavit heslo uživateli (pro aktivaci přes kód)
+    db.prepare(`
+      UPDATE users 
+      SET password = ?
+      WHERE id = ?
+    `).run(hashedPassword, userId);
+
+    // Vytvořit smlouvu
+    const contractResult = db.prepare(`
+      INSERT INTO contracts (
+        user_id, contract_type, access_code,
+        commission_rate, commission_terms,
+        status, created_by
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+    `).run(
+      userId, contract_type, accessCode,
+      commission_rate, commission_terms,
+      approved_by
+    );
+
+    // Aktualizovat registraci
+    db.prepare(`
+      UPDATE registration_requests 
+      SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP, admin_notes = ?
+      WHERE id = ?
+    `).run(approved_by, admin_notes, id);
+
+    // Odeslat schvalovací email s přístupovým kódem
+    try {
+      const fullName = `${request.name} ${request.surname}`;
+      await sendRegistrationApproval(request.email, fullName, accessCode, contract_type, userId);
+      console.log(`Registrace schválena: ${request.email}`);
+      console.log(`Přístupový kód: ${accessCode}`);
+      console.log(`Smlouva ID: ${contractResult.lastInsertRowid}`);
+      console.log(`Email odeslán na: ${request.email}`);
+    } catch (emailError) {
+      console.error('Chyba při odesílání emailu:', emailError);
+      // Pokračujeme i když email selže
+    }
+
+    res.json({ 
+      success: true, 
+      user_id: userId,
+      access_code: accessCode,
+      contract_id: contractResult.lastInsertRowid
+    });
+  } catch (error) {
+    console.error('Chyba při schvalování:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Zamítnout registraci
+app.post('/api/registration-requests/:id/reject', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    db.prepare(`
+      UPDATE registration_requests 
+      SET status = 'rejected', admin_notes = ?
+      WHERE id = ?
+    `).run(reason, id);
+
+    // TODO: Odeslat email o zamítnutí
+    console.log(`❌ Registrace zamítnuta: ID ${id}`);
+
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -646,11 +878,13 @@ app.post('/api/properties', (req, res) => {
       price, price_note, city, district, street, zip_code, latitude, longitude,
       area, land_area, rooms, floor, total_floors,
       building_type, building_condition, ownership,
-      furnished, has_balcony, has_terrace, has_cellar, has_garage,
+      furnished, has_balcony, has_loggia, has_terrace, has_cellar, has_garage,
       has_parking, has_elevator, has_garden, has_pool,
-      energy_rating, heating_type, agent_id, images, main_image, documents,
+      energy_rating, heating_type,
+      is_auction, exclusively_at_rk, attractive_offer,
+      agent_id, images, main_image, documents,
       video_url, video_tour_url, matterport_url, floor_plans, website_url,
-      is_reserved, reserved_until, user_role
+      user_role
     } = req.body;
 
     // Určení statusu podle role:
@@ -667,27 +901,31 @@ app.post('/api/properties', (req, res) => {
         building_type, building_condition, ownership,
         furnished, has_balcony, has_terrace, has_cellar, has_garage,
         has_parking, has_elevator, has_garden, has_pool,
-        energy_rating, heating_type, agent_id, status, views_count,
+        energy_rating, heating_type,
+        agent_id, status, views_count,
         images, main_image, documents,
         video_url, video_tour_url, matterport_url, floor_plans, website_url,
-        is_reserved, reserved_until, sreality_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        has_loggia, is_auction, exclusively_at_rk, attractive_offer,
+        sreality_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      title, description, transaction_type, property_type, property_subtype,
+      title, description, transaction_type, property_type, property_subtype || null,
       null, null, null, // commission fields - nastaví admin při schvalování
-      price, price_note, city, district, street, zip_code, latitude, longitude,
-      area, land_area, rooms, floor, total_floors,
-      building_type, building_condition, ownership,
-      furnished, has_balcony || 0, has_terrace || 0, has_cellar || 0, has_garage || 0,
+      price, price_note || null, city, district || null, street || null, zip_code || null, latitude || null, longitude || null,
+      area || null, land_area || null, rooms || null, floor || null, total_floors || null,
+      building_type || null, building_condition || null, ownership || null,
+      furnished || null, has_balcony || 0, has_terrace || 0, has_cellar || 0, has_garage || 0,
       has_parking || 0, has_elevator || 0, has_garden || 0, has_pool || 0,
-      energy_rating, heating_type, agent_id, initialStatus, 0, // views_count = 0
+      energy_rating || null, heating_type || null,
+      agent_id, initialStatus, 0, // views_count = 0
       images ? JSON.stringify(images) : null,
-      main_image,
+      main_image || null,
       documents ? JSON.stringify(documents) : null,
-      video_url, video_tour_url, matterport_url,
+      video_url || null, video_tour_url || null, matterport_url || null,
       floor_plans ? JSON.stringify(floor_plans) : null,
-      website_url,
-      is_reserved || 0, reserved_until, null // sreality_id
+      website_url || null,
+      has_loggia || 0, is_auction || 0, exclusively_at_rk || 0, attractive_offer || 0,
+      null // sreality_id
     );
 
     const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(result.lastInsertRowid);
@@ -712,12 +950,26 @@ app.put('/api/properties/:id', (req, res) => {
       price, price_note, city, district, street, zip_code, latitude, longitude,
       area, land_area, rooms, floor, total_floors,
       building_type, building_condition, ownership,
-      furnished, has_balcony, has_terrace, has_cellar, has_garage,
+      furnished, has_balcony, has_loggia, has_terrace, has_cellar, has_garage,
       has_parking, has_elevator, has_garden, has_pool,
-      energy_rating, heating_type, status, images, main_image, documents,
+      energy_rating, heating_type,
+      is_auction, exclusively_at_rk, attractive_offer,
+      status, images, main_image, documents,
       video_url, video_tour_url, matterport_url, floor_plans, website_url,
-      is_reserved, reserved_until
+      user_role
     } = req.body;
+
+    // Zkontrolovat, jestli je nemovitost schválená
+    const currentProperty = db.prepare('SELECT * FROM properties WHERE id = ?').get(req.params.id);
+    
+    let finalStatus = status;
+    
+    // Pokud agent upravuje schválenou nemovitost (active nebo approved_pending_contract), změnit status na pending_changes
+    if (user_role !== 'admin' && currentProperty.approved_at && 
+        (currentProperty.status === 'active' || currentProperty.status === 'approved_pending_contract')) {
+      finalStatus = 'pending_changes';
+      console.log(`Agent upravuje schvalenou nemovitost ${req.params.id} - status zmenen na pending_changes`);
+    }
 
     db.prepare(`
       UPDATE properties SET
@@ -725,11 +977,12 @@ app.put('/api/properties/:id', (req, res) => {
         price = ?, price_note = ?, city = ?, district = ?, street = ?, zip_code = ?, latitude = ?, longitude = ?,
         area = ?, land_area = ?, rooms = ?, floor = ?, total_floors = ?,
         building_type = ?, building_condition = ?, ownership = ?,
-        furnished = ?, has_balcony = ?, has_terrace = ?, has_cellar = ?, has_garage = ?,
+        furnished = ?, has_balcony = ?, has_loggia = ?, has_terrace = ?, has_cellar = ?, has_garage = ?,
         has_parking = ?, has_elevator = ?, has_garden = ?, has_pool = ?,
-        energy_rating = ?, heating_type = ?, status = ?, images = ?, main_image = ?, documents = ?,
+        energy_rating = ?, heating_type = ?,
+        is_auction = ?, exclusively_at_rk = ?, attractive_offer = ?,
+        status = ?, images = ?, main_image = ?, documents = ?,
         video_url = ?, video_tour_url = ?, matterport_url = ?, floor_plans = ?, website_url = ?,
-        is_reserved = ?, reserved_until = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -737,16 +990,17 @@ app.put('/api/properties/:id', (req, res) => {
       price, price_note, city, district, street, zip_code, latitude, longitude,
       area, land_area, rooms, floor, total_floors,
       building_type, building_condition, ownership,
-      furnished, has_balcony || 0, has_terrace || 0, has_cellar || 0, has_garage || 0,
+      furnished, has_balcony || 0, has_loggia || 0, has_terrace || 0, has_cellar || 0, has_garage || 0,
       has_parking || 0, has_elevator || 0, has_garden || 0, has_pool || 0,
-      energy_rating, heating_type, status,
+      energy_rating, heating_type,
+      is_auction || 0, exclusively_at_rk || 0, attractive_offer || 0,
+      finalStatus,
       images ? JSON.stringify(images) : null,
       main_image,
       documents ? JSON.stringify(documents) : null,
       video_url, video_tour_url, matterport_url,
       floor_plans ? JSON.stringify(floor_plans) : null,
       website_url,
-      is_reserved || 0, reserved_until,
       req.params.id
     );
 
@@ -840,7 +1094,7 @@ app.get('/api/properties/matching/:userId', (req, res) => {
 // Získat všechny poptávky
 app.get('/api/demands', (req, res) => {
   try {
-    const { agentId, show_all, status } = req.query;
+    const { agentId, show_all, status, userRole } = req.query;
     
     let query = `
       SELECT d.*, u.name as client_name, u.email as client_email, u.phone as client_phone
@@ -848,26 +1102,25 @@ app.get('/api/demands', (req, res) => {
       LEFT JOIN users u ON d.client_id = u.id
       WHERE 1=1
     `;
+    
     const params = [];
     
-    // Filtr statusu - pokud není show_all, filtruj jen active
-    if (!show_all && !status) {
-      query += ' AND d.status = ?';
-      params.push('active');
-    } else if (status) {
+    // Admin vidí vše
+    // Agent vidí všechny aktivní poptávky (stejně jako u properties)
+    // Klient vidí pouze své
+    if (userRole === 'client' && agentId && show_all !== 'true') {
+      query += ' AND d.client_id = ?';
+      params.push(agentId);
+    } else if (userRole === 'agent') {
+      // Agent vidí všechny aktivní poptávky
+      query += ' AND d.status = "active"';
+    }
+    
+    if (status && userRole !== 'agent') {
       query += ' AND d.status = ?';
       params.push(status);
     }
     
-    // Pokud je zadán agentId, vrátit jen poptávky jeho klientů
-    if (agentId) {
-      query += ` AND u.id IN (
-        SELECT id FROM users 
-        WHERE role = 'client' 
-        AND (company_id = (SELECT company_id FROM users WHERE id = ?) OR id = ?)
-      )`;
-      params.push(agentId, agentId);
-    }
     
     query += ' ORDER BY d.created_at DESC';
     
@@ -1521,29 +1774,38 @@ app.get('/api/stats', (req, res) => {
   try {
     const stats = {
       properties: {
-        total: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active'").get().count,
-        sale: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active' AND transaction_type = 'sale'").get().count,
-        rent: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active' AND transaction_type = 'rent'").get().count,
+        total: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract')").get().count,
+        sale: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract') AND transaction_type = 'sale'").get().count,
+        rent: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract') AND transaction_type = 'rent'").get().count,
+        pending: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'pending'").get().count,
         byType: {
-          flat: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active' AND property_type = 'flat'").get().count,
-          house: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active' AND property_type = 'house'").get().count,
-          commercial: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active' AND property_type = 'commercial'").get().count,
-          land: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status = 'active' AND property_type = 'land'").get().count,
+          flat: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract') AND property_type = 'flat'").get().count,
+          house: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract') AND property_type = 'house'").get().count,
+          commercial: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract') AND property_type = 'commercial'").get().count,
+          land: db.prepare("SELECT COUNT(*) as count FROM properties WHERE status IN ('active', 'approved_pending_contract') AND property_type = 'land'").get().count,
         }
       },
       demands: {
         total: db.prepare("SELECT COUNT(*) as count FROM demands WHERE status = 'active'").get().count,
         sale: db.prepare("SELECT COUNT(*) as count FROM demands WHERE status = 'active' AND transaction_type = 'sale'").get().count,
         rent: db.prepare("SELECT COUNT(*) as count FROM demands WHERE status = 'active' AND transaction_type = 'rent'").get().count,
+        pending: db.prepare("SELECT COUNT(*) as count FROM demands WHERE status = 'pending'").get().count,
       },
       users: {
-        total: db.prepare('SELECT COUNT(*) as count FROM users').get().count,
-        agents: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'agent'").get().count,
-        clients: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'client'").get().count,
+        total: db.prepare('SELECT COUNT(*) as count FROM users WHERE is_active = 1').get().count,
+        agents: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'agent' AND is_active = 1").get().count,
+        clients: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'client' AND is_active = 1").get().count,
+        admins: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get().count,
       },
       matches: {
         total: db.prepare('SELECT COUNT(*) as count FROM matches').get().count,
         new: db.prepare("SELECT COUNT(*) as count FROM matches WHERE status = 'new'").get().count,
+        accepted: db.prepare("SELECT COUNT(*) as count FROM matches WHERE status = 'accepted'").get().count,
+      },
+      registrations: {
+        pending: db.prepare("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'pending'").get().count,
+        approved: db.prepare("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'approved'").get().count,
+        rejected: db.prepare("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'rejected'").get().count,
       }
     };
 
@@ -1572,14 +1834,28 @@ app.patch('/api/properties/:id/approve', async (req, res) => {
     
     // Pokud admin schvaluje (ne zamítá), nastaví provizi a status 'approved_pending_contract'
     if (status === 'active' || status === 'approved_pending_contract') {
+      // Uložit aktuální verzi jako schválenou
+      const currentSnapshot = JSON.stringify({
+        title: property.title,
+        description: property.description,
+        price: property.price,
+        area: property.area,
+        rooms: property.rooms,
+        // ... další důležitá pole
+      });
+
       db.prepare(`
         UPDATE properties 
         SET status = 'approved_pending_contract', 
             commission_rate = ?, 
             commission_terms = ?,
+            approved_at = CURRENT_TIMESTAMP,
+            approved_by = ?,
+            last_approved_version = ?,
+            pending_changes = NULL,
             updated_at = CURRENT_TIMESTAMP 
         WHERE id = ?
-      `).run(commission_rate, commission_terms, req.params.id);
+      `).run(commission_rate, commission_terms, admin_id, currentSnapshot, req.params.id);
       
       logAction(admin_id, 'approve', 'property', req.params.id, `Nemovitost schválena s provizí ${commission_rate}%: ${property.title}`, req);
       
@@ -2446,7 +2722,7 @@ app.post('/api/loi/request', async (req, res) => {
 });
 
 // Podpis LOI kódem
-app.post('/api/loi/sign', (req, res) => {
+app.post('/api/loi/sign', async (req, res) => {
   try {
     const { user_id, property_id, demand_id, code } = req.body;
     
@@ -2476,16 +2752,120 @@ app.post('/api/loi/sign', (req, res) => {
       return res.status(400).json({ error: 'Kód vypršel' });
     }
     
-    // Podepsat LOI
-    db.prepare('UPDATE loi_signatures SET signed_at = ? WHERE id = ?')
-      .run(new Date().toISOString(), loi.id);
+    // Připravit data pro uložení smlouvy
+    let contractText = '';
+    let contractHash = '';
+    
+    // Získat data pro email a uložení smlouvy
+    try {
+      console.log('📧 Začínám přípravu emailu s LOI...');
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(user_id);
+      console.log(`👤 Uživatel: ${user.name} (${user.email})`);
+      
+      const entity = entity_type === 'property' 
+        ? db.prepare('SELECT * FROM properties WHERE id = ?').get(entity_id)
+        : db.prepare('SELECT * FROM demands WHERE id = ?').get(entity_id);
+      
+      const entityName = entity_type === 'property' 
+        ? entity.title 
+        : `${entity.transaction_type} - ${entity.property_type}`;
+      
+      console.log(`📄 Entita: ${entityName}`);
+      
+      // Získat šablonu LOI
+      const template = db.prepare(`
+        SELECT * FROM contract_templates 
+        WHERE template_type = 'loi' AND is_active = 1
+        ORDER BY created_at DESC LIMIT 1
+      `).get();
+      
+      console.log(`📋 Šablona LOI: ${template ? 'nalezena' : 'NENALEZENA'}`);
+      
+      if (template && user.email) {
+        // Nahradit placeholdery
+        contractText = template.template_content;
+        contractText = contractText.replace(/{{user_name}}/g, user.name || '');
+        contractText = contractText.replace(/{{user_email}}/g, user.email || '');
+        contractText = contractText.replace(/{{user_company}}/g, user.company ? `Firma: ${user.company}` : '');
+        contractText = contractText.replace(/{{user_ico}}/g, user.ico ? `IČO: ${user.ico}` : '');
+        contractText = contractText.replace(/{{entity_type}}/g, entity_type === 'property' ? 'nabídce nemovitosti' : 'poptávce');
+        contractText = contractText.replace(/{{entity_name}}/g, entityName);
+        contractText = contractText.replace(/{{signature_date}}/g, new Date().toLocaleDateString('cs-CZ'));
+        contractText = contractText.replace(/{{signature_time}}/g, new Date().toLocaleTimeString('cs-CZ'));
+        contractText = contractText.replace(/{{ip_address}}/g, req.ip || 'N/A');
+        contractText = contractText.replace(/{{verification_code}}/g, code);
+        
+        // Vytvořit hash smlouvy
+        contractHash = crypto.createHash('sha256').update(contractText).digest('hex');
+        
+        // Odeslat email s podepsanou smlouvou
+        await sendEmail({
+          to: user.email,
+          subject: 'Podepsaná LOI - Letter of Intent',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #667eea;">Podepsaná LOI - Letter of Intent</h2>
+              
+              <p>Dobrý den ${user.name},</p>
+              
+              <p>děkujeme za podpis Letter of Intent. Níže naleznete kopii podepsané smlouvy.</p>
+              
+              <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3 style="margin-top: 0;">Detaily smlouvy:</h3>
+                <p><strong>Předmět:</strong> ${entityName}</p>
+                <p><strong>Datum podpisu:</strong> ${new Date().toLocaleString('cs-CZ')}</p>
+                <p><strong>Ověřovací kód:</strong> ${code}</p>
+                <p><strong>Platnost:</strong> 90 dnů</p>
+              </div>
+              
+              <div style="background: white; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>Kompletní znění smlouvy:</h3>
+                <pre style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.6;">${contractText}</pre>
+              </div>
+              
+              <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+                Tuto smlouvu si prosím uschovejte pro své záznamy.<br>
+                V případě dotazů nás kontaktujte na info@ptf.cz
+              </p>
+              
+              <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+              
+              <p style="color: #9ca3af; font-size: 12px;">
+                PTF reality, s.r.o.<br>
+                Dřevěná 99/3, 301 00 Plzeň<br>
+                IČO: 06684394
+              </p>
+            </div>
+          `
+        });
+        
+        console.log(`✅ LOI odeslána emailem na ${user.email}`);
+      } else {
+        console.log(`⚠️ Email s LOI NEBYL odeslán - šablona: ${!!template}, email: ${user.email}`);
+      }
+    } catch (emailError) {
+      console.error('⚠️ Chyba při odesílání LOI emailem:', emailError);
+      console.error('Stack trace:', emailError.stack);
+      // Nepřerušujeme proces, i když email selže
+    }
+    
+    // Podepsat LOI a uložit kompletní znění
+    db.prepare(`
+      UPDATE loi_signatures 
+      SET signed_at = ?,
+          contract_text = ?,
+          contract_hash = ?,
+          ip_address = ?,
+          verification_code = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), contractText, contractHash, req.ip || 'N/A', code, loi.id);
     
     // Log akce
     logAction(user_id, 'sign_loi', entity_type, entity_id, `Podepsána LOI kódem: ${code}`, req);
     
     res.json({ 
       success: true,
-      message: 'LOI úspěšně podepsána'
+      message: 'LOI úspěšně podepsána a odeslána na váš email'
     });
   } catch (error) {
     console.error('Chyba při podpisu LOI:', error);
@@ -2752,6 +3132,39 @@ app.get('/api/brokerage-contracts/user/:userId', (req, res) => {
   }
 });
 
+// Získat všechny podepsané obecné smlouvy (admin)
+app.get('/api/contracts/all', (req, res) => {
+  try {
+    const contracts = db.prepare(`
+      SELECT c.*, u.name as user_name
+      FROM contracts c
+      LEFT JOIN users u ON c.user_id = u.id
+      WHERE c.status = 'signed'
+      ORDER BY c.signed_at DESC
+    `).all();
+    
+    res.json(contracts);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Získat podepsané obecné smlouvy uživatele
+app.get('/api/contracts/user/:userId', (req, res) => {
+  try {
+    const contracts = db.prepare(`
+      SELECT c.*
+      FROM contracts c
+      WHERE c.user_id = ? AND c.status = 'signed'
+      ORDER BY c.signed_at DESC
+    `).all(req.params.userId);
+    
+    res.json(contracts);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Získat matching demands pro property (dynamicky)
 app.get('/api/properties/:id/matches', (req, res) => {
   try {
@@ -2995,6 +3408,417 @@ app.post('/api/agent-declarations/verify', (req, res) => {
   }
 });
 
+// ============================================
+// CONTRACT TEMPLATES
+// ============================================
+
+// Získat šablonu smlouvy podle typu
+app.get('/api/contract-templates/:type', (req, res) => {
+  try {
+    const { type } = req.params
+    
+    const template = db.prepare(`
+      SELECT * FROM contract_templates 
+      WHERE template_type = ? AND is_active = 1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(type)
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Šablona nenalezena' })
+    }
+    
+    res.json(template)
+  } catch (error) {
+    console.error('Chyba při načítání šablony:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Získat všechny šablony (admin)
+app.get('/api/contract-templates', (req, res) => {
+  try {
+    const templates = db.prepare(`
+      SELECT * FROM contract_templates 
+      ORDER BY template_type, created_at DESC
+    `).all()
+    
+    res.json(templates)
+  } catch (error) {
+    console.error('Chyba při načítání šablon:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ============================================
+// PASSWORD RESET
+// ============================================
+
+// Request password reset (pošle email s kódem)
+app.post('/api/auth/request-password-reset', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email je povinný' });
+    }
+    
+    // Najít uživatele
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    
+    if (!user) {
+      // Z bezpečnostních důvodů neříkáme, že email neexistuje
+      return res.json({ success: true, message: 'Pokud email existuje, byl odeslán kód pro reset hesla' });
+    }
+    
+    // Vygenerovat 6-místný kód
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 minut
+    
+    // Uložit do access_codes
+    db.prepare(`
+      INSERT INTO access_codes (user_id, entity_type, entity_id, code, expires_at, is_active)
+      VALUES (?, 'password_reset', 0, ?, ?, 1)
+    `).run(user.id, code, expires_at);
+    
+    // Odeslat email
+    try {
+      await sendAccessCode(
+        user.email,
+        user.name,
+        code,
+        'password_reset',
+        'Reset hesla',
+        expires_at
+      );
+    } catch (emailError) {
+      console.log('⚠️ Email se nepodařilo odeslat, ale kód byl vygenerován:', code);
+    }
+    
+    // Log akce
+    logAction(user.id, 'request_password_reset', 'user', user.id, `Žádost o reset hesla`, req);
+    
+    res.json({ 
+      success: true, 
+      message: 'Kód pro reset hesla byl odeslán na email',
+      code: process.env.NODE_ENV === 'development' ? code : undefined // Pro testování
+    });
+    
+  } catch (error) {
+    console.error('Chyba při žádosti o reset hesla:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reset password s kódem
+app.post('/api/auth/reset-password', (req, res) => {
+  try {
+    const { email, code, new_password } = req.body;
+    
+    if (!email || !code || !new_password) {
+      return res.status(400).json({ error: 'Email, kód a nové heslo jsou povinné' });
+    }
+    
+    if (new_password.length < 6) {
+      return res.status(400).json({ error: 'Heslo musí mít alespoň 6 znaků' });
+    }
+    
+    // Najít uživatele
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Uživatel nenalezen' });
+    }
+    
+    // Ověřit kód
+    const accessCode = db.prepare(`
+      SELECT * FROM access_codes 
+      WHERE user_id = ? 
+        AND code = ? 
+        AND entity_type = 'password_reset'
+        AND is_active = 1
+        AND datetime(expires_at) > datetime('now')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(user.id, code.toUpperCase());
+    
+    if (!accessCode) {
+      return res.status(400).json({ error: 'Neplatný nebo expirovaný kód' });
+    }
+    
+    // Hashovat nové heslo
+    const hashedPassword = bcrypt.hashSync(new_password, 10);
+    
+    // Aktualizovat heslo
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, user.id);
+    
+    // Deaktivovat kód
+    db.prepare('UPDATE access_codes SET is_active = 0 WHERE id = ?').run(accessCode.id);
+    
+    // Log akce
+    logAction(user.id, 'password_reset', 'user', user.id, `Heslo bylo resetováno`, req);
+    
+    res.json({ success: true, message: 'Heslo bylo úspěšně změněno' });
+    
+  } catch (error) {
+    console.error('Chyba při resetu hesla:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ověřit LOI kód
+app.post('/api/auth/verify-loi-code', async (req, res) => {
+  try {
+    const { user_id, code, entityType, entityId } = req.body;
+    
+    if (!user_id || !code || !entityType || !entityId) {
+      return res.status(400).json({ error: 'Chybí povinné parametry' });
+    }
+    
+    // Najít uživatele
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(user_id);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Uživatel nenalezen' });
+    }
+    
+    // Ověřit kód
+    const accessCode = db.prepare(`
+      SELECT * FROM access_codes 
+      WHERE user_id = ? 
+        AND code = ? 
+        AND entity_type = 'loi'
+        AND is_active = 1
+        AND datetime(expires_at) > datetime('now')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(user.id, code.toUpperCase());
+    
+    if (!accessCode) {
+      return res.status(400).json({ error: 'Neplatný nebo expirovaný kód' });
+    }
+    
+    // Označit kód jako použitý
+    db.prepare('UPDATE access_codes SET is_active = 0 WHERE id = ?').run(accessCode.id);
+    
+    // Připravit data pro uložení smlouvy
+    let contractText = '';
+    let contractHash = '';
+    
+    // Odeslat podepsanou smlouvu emailem a uložit do DB
+    try {
+      const entity = entityType === 'property' 
+        ? db.prepare('SELECT * FROM properties WHERE id = ?').get(entityId)
+        : db.prepare('SELECT * FROM demands WHERE id = ?').get(entityId);
+      
+      const entityName = entityType === 'property' 
+        ? entity.title 
+        : `${entity.transaction_type} - ${entity.property_type}`;
+      
+      // Získat šablonu LOI
+      const template = db.prepare(`
+        SELECT * FROM contract_templates 
+        WHERE template_type = 'loi' AND is_active = 1
+        ORDER BY created_at DESC LIMIT 1
+      `).get();
+      
+      if (template && user.email) {
+        // Nahradit placeholdery
+        contractText = template.template_content;
+        contractText = contractText.replace(/{{user_name}}/g, user.name || '');
+        contractText = contractText.replace(/{{user_email}}/g, user.email || '');
+        contractText = contractText.replace(/{{user_company}}/g, user.company ? `Firma: ${user.company}` : '');
+        contractText = contractText.replace(/{{user_ico}}/g, user.ico ? `IČO: ${user.ico}` : '');
+        contractText = contractText.replace(/{{entity_type}}/g, entityType === 'property' ? 'nabídce nemovitosti' : 'poptávce');
+        contractText = contractText.replace(/{{entity_name}}/g, entityName);
+        contractText = contractText.replace(/{{signature_date}}/g, new Date().toLocaleDateString('cs-CZ'));
+        contractText = contractText.replace(/{{signature_time}}/g, new Date().toLocaleTimeString('cs-CZ'));
+        contractText = contractText.replace(/{{ip_address}}/g, req.ip || 'N/A');
+        contractText = contractText.replace(/{{verification_code}}/g, code);
+        
+        // Vytvořit hash smlouvy pro ověření integrity
+        contractHash = crypto.createHash('sha256').update(contractText).digest('hex');
+        
+        // Odeslat email s podepsanou smlouvou
+        await sendEmail({
+          to: user.email,
+          subject: 'Podepsaná LOI - Letter of Intent',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #667eea;">Podepsaná LOI - Letter of Intent</h2>
+              
+              <p>Dobrý den ${user.name},</p>
+              
+              <p>děkujeme za podpis Letter of Intent. Níže naleznete kopii podepsané smlouvy.</p>
+              
+              <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3 style="margin-top: 0;">Detaily smlouvy:</h3>
+                <p><strong>Předmět:</strong> ${entityName}</p>
+                <p><strong>Datum podpisu:</strong> ${new Date().toLocaleString('cs-CZ')}</p>
+                <p><strong>Ověřovací kód:</strong> ${code}</p>
+                <p><strong>Platnost:</strong> 90 dnů</p>
+              </div>
+              
+              <div style="background: white; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>Kompletní znění smlouvy:</h3>
+                <pre style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.6;">${contractText}</pre>
+              </div>
+              
+              <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+                Tuto smlouvu si prosím uschovejte pro své záznamy.<br>
+                V případě dotazů nás kontaktujte na info@ptf.cz
+              </p>
+              
+              <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+              
+              <p style="color: #9ca3af; font-size: 12px;">
+                PTF reality, s.r.o.<br>
+                Dřevěná 99/3, 301 00 Plzeň<br>
+                IČO: 06684394
+              </p>
+            </div>
+          `
+        });
+        
+        console.log(`✅ LOI odeslána emailem na ${user.email}`);
+      }
+    } catch (emailError) {
+      console.error('⚠️ Chyba při odesílání LOI emailem:', emailError);
+      // Nepřerušujeme proces, i když email selže
+    }
+    
+    // Uložit kompletní znění smlouvy do databáze
+    if (contractText) {
+      try {
+        // Najít záznam LOI signature
+        const loiSignature = db.prepare(`
+          SELECT * FROM loi_signatures 
+          WHERE user_id = ? 
+            AND ((match_property_id = ? AND ? = 'property') OR (match_demand_id = ? AND ? = 'demand'))
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).get(user_id, entityId, entityType, entityId, entityType);
+        
+        if (loiSignature) {
+          // Aktualizovat s kompletním textem
+          db.prepare(`
+            UPDATE loi_signatures 
+            SET contract_text = ?,
+                contract_hash = ?,
+                ip_address = ?,
+                verification_code = ?,
+                signed_at = datetime('now')
+            WHERE id = ?
+          `).run(contractText, contractHash, req.ip || 'N/A', code, loiSignature.id);
+          
+          console.log(`✅ Kompletní znění LOI uloženo do databáze (ID: ${loiSignature.id})`);
+        }
+      } catch (dbError) {
+        console.error('⚠️ Chyba při ukládání znění smlouvy do DB:', dbError);
+      }
+    }
+    
+    // Log akce
+    logAction(user_id, 'loi_signed', entityType, entityId, `LOI podepsána pro ${entityType} ID ${entityId}`, req);
+    
+    res.json({ success: true, message: 'LOI byla úspěšně podepsána a odeslána na váš email' });
+  } catch (error) {
+    console.error('Chyba při ověřování LOI kódu:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin reset hesla (bez kódu)
+app.post('/api/admin/reset-user-password', (req, res) => {
+  try {
+    const { admin_id, user_id, new_password } = req.body;
+    
+    // Ověřit, že je admin
+    const admin = db.prepare('SELECT * FROM users WHERE id = ? AND role = "admin"').get(admin_id);
+    
+    if (!admin) {
+      return res.status(403).json({ error: 'Pouze admin může resetovat hesla' });
+    }
+    
+    if (!new_password || new_password.length < 6) {
+      return res.status(400).json({ error: 'Heslo musí mít alespoň 6 znaků' });
+    }
+    
+    // Najít uživatele
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(user_id);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Uživatel nenalezen' });
+    }
+    
+    // Hashovat nové heslo
+    const hashedPassword = bcrypt.hashSync(new_password, 10);
+    
+    // Aktualizovat heslo
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, user_id);
+    
+    // Log akce
+    logAction(admin_id, 'admin_password_reset', 'user', user_id, `Admin resetoval heslo pro ${user.name}`, req);
+    
+    res.json({ success: true, message: `Heslo pro ${user.name} bylo úspěšně změněno` });
+    
+  } catch (error) {
+    console.error('Chyba při admin resetu hesla:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// ==================== EMAIL TEMPLATES ====================
+
+// Získat všechny emailové šablony
+app.get('/api/email-templates', (req, res) => {
+  try {
+    const templates = db.prepare('SELECT * FROM email_templates ORDER BY name').all();
+    res.json(templates);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Získat jednu emailovou šablonu
+app.get('/api/email-templates/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const template = db.prepare('SELECT * FROM email_templates WHERE id = ?').get(id);
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Šablona nenalezena' });
+    }
+    
+    res.json(template);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Aktualizovat emailovou šablonu
+app.put('/api/email-templates/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, subject, html_content, variables, description, is_active } = req.body;
+    
+    db.prepare(`
+      UPDATE email_templates 
+      SET name = ?, subject = ?, html_content = ?, variables = ?, 
+          description = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(name, subject, html_content, variables, description, is_active, id);
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// START SERVER
+// ============================================
+
 app.listen(PORT, () => {
-  console.log(`[SERVER] Realitní API běží na http://localhost:${PORT}`);
+  console.log(`[SERVER] Realitní API běží na http://localhost:${PORT}`)
 });

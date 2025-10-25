@@ -6,9 +6,10 @@ const API_URL = '/api'
 export default function SignedDocuments({ userId, userRole }) {
   const [documents, setDocuments] = useState([])
   const [lois, setLois] = useState([])
+  const [generalContracts, setGeneralContracts] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedDoc, setSelectedDoc] = useState(null)
-  const [activeDocType, setActiveDocType] = useState('all') // all, contracts, loi
+  const [activeDocType, setActiveDocType] = useState('all') // all, contracts, loi, general
 
   useEffect(() => {
     fetchDocuments()
@@ -43,6 +44,19 @@ export default function SignedDocuments({ userId, userRole }) {
         const loisWithType = loisData.map(doc => ({ ...doc, type: 'loi' }))
         setLois(loisWithType)
       }
+      
+      // Načíst obecné smlouvy (cooperation_client apod.)
+      const generalEndpoint = userRole === 'admin'
+        ? `${API_URL}/contracts/all`
+        : `${API_URL}/contracts/user/${userId}`
+      
+      const generalResponse = await fetch(generalEndpoint)
+      if (generalResponse.ok) {
+        const generalData = await generalResponse.json()
+        // Přidat type pro unikátní key
+        const generalWithType = generalData.map(doc => ({ ...doc, type: 'general' }))
+        setGeneralContracts(generalWithType)
+      }
     } catch (error) {
       console.error('Chyba při načítání dokumentů:', error)
     } finally {
@@ -73,49 +87,65 @@ export default function SignedDocuments({ userId, userRole }) {
     )
   }
 
-  const totalDocs = documents.length + lois.length;
+  const totalDocs = documents.length + lois.length + generalContracts.length;
   const filteredDocs = activeDocType === 'contracts' ? documents : 
-                       activeDocType === 'loi' ? lois : 
-                       [...documents, ...lois].sort((a, b) => new Date(b.signed_at) - new Date(a.signed_at));
+                       activeDocType === 'loi' ? lois :
+                       activeDocType === 'general' ? generalContracts :
+                       [...documents, ...lois, ...generalContracts].sort((a, b) => new Date(b.signed_at || b.created_at) - new Date(a.signed_at || a.created_at));
 
   return (
     <>
       <div className="glass-card p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <FileText className="w-5 h-5 text-primary-600" />
-            Podepsané dokumenty
-          </h3>
-          <span className="badge bg-green-100 text-green-700">
-            {totalDocs} {totalDocs === 1 ? 'dokument' : totalDocs < 5 ? 'dokumenty' : 'dokumentů'}
-          </span>
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h3 className="text-2xl font-bold text-gray-900">Podepsané dokumenty</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              {totalDocs} {totalDocs === 1 ? 'dokument' : totalDocs < 5 ? 'dokumenty' : 'dokumentů'}
+            </p>
+          </div>
         </div>
 
-        {/* Filtry */}
-        <div className="flex gap-2 mb-4">
+        {/* Filtry - styl navigace */}
+        <div className="flex flex-wrap items-center gap-2 mb-6">
           <button
             onClick={() => setActiveDocType('all')}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-              activeDocType === 'all' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+              activeDocType === 'all' 
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
+                : 'hover:bg-white/30'
             }`}
           >
             Vše ({totalDocs})
           </button>
           <button
             onClick={() => setActiveDocType('contracts')}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-              activeDocType === 'contracts' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+              activeDocType === 'contracts' 
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
+                : 'hover:bg-white/30'
             }`}
           >
             Zprostředkovatelské smlouvy ({documents.length})
           </button>
           <button
             onClick={() => setActiveDocType('loi')}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-              activeDocType === 'loi' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+              activeDocType === 'loi' 
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
+                : 'hover:bg-white/30'
             }`}
           >
             LOI ({lois.length})
+          </button>
+          <button
+            onClick={() => setActiveDocType('general')}
+            className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+              activeDocType === 'general' 
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
+                : 'hover:bg-white/30'
+            }`}
+          >
+            Smlouvy o spolupráci ({generalContracts.length})
           </button>
         </div>
 
@@ -133,14 +163,20 @@ export default function SignedDocuments({ userId, userRole }) {
                     <div className="flex items-center gap-2 mb-2">
                       <CheckCircle className="w-5 h-5 text-green-600" />
                       <h4 className="font-semibold text-gray-900">
-                        {doc.commission_rate ? 'Zprostředkovatelská smlouva' : 'LOI (Letter of Intent)'}
+                        {doc.type === 'contract' ? 'Zprostředkovatelská smlouva' : 
+                         doc.type === 'loi' ? 'LOI (Letter of Intent)' :
+                         doc.type === 'general' && doc.contract_type === 'cooperation_client' ? 'Smlouva o spolupráci s klientem' :
+                         'Smlouva'}
                       </h4>
                       <span className={`badge text-xs ${
-                        doc.commission_rate ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+                        doc.type === 'contract' ? 'bg-purple-100 text-purple-700' : 
+                        doc.type === 'loi' ? 'bg-blue-100 text-blue-700' :
+                        'bg-green-100 text-green-700'
                       }`}>
-                        {doc.commission_rate 
+                        {doc.type === 'contract' 
                           ? (doc.entity_type === 'property' ? 'Nabídka' : 'Poptávka') + ' #' + doc.entity_id
-                          : 'Match'
+                          : doc.type === 'loi' ? 'Match'
+                          : doc.contract_type || 'Obecná'
                         }
                       </span>
                     </div>
@@ -148,10 +184,12 @@ export default function SignedDocuments({ userId, userRole }) {
                     <div className="grid grid-cols-2 gap-2 text-sm text-gray-600 mb-2">
                       {doc.commission_rate ? (
                         <div>Provize: <strong>{doc.commission_rate}%</strong></div>
-                      ) : (
+                      ) : doc.type === 'loi' ? (
                         <div>Typ: <strong>Záměr spolupráce</strong></div>
+                      ) : (
+                        <div>Status: <strong>{doc.status === 'signed' ? 'Podepsáno' : doc.status}</strong></div>
                       )}
-                      <div>Podepsáno: {formatDate(doc.signed_at)}</div>
+                      <div>Podepsáno: {formatDate(doc.signed_at || doc.created_at)}</div>
                       {userRole === 'admin' && (
                         <div className="col-span-2">
                           {doc.commission_rate ? 'Agent' : 'Uživatel'}: {doc.user_name}

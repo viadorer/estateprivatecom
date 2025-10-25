@@ -116,9 +116,11 @@ export default function BrokerageContractModal({ isOpen, onClose, entity, entity
                     <div className="grid grid-cols-2 gap-4 mt-4">
                       <div className="p-3 bg-blue-50 rounded">
                         <p className="font-semibold">Zprostředkovatel:</p>
-                        <p className="mt-2"><strong>Estate Private s.r.o.</strong></p>
-                        <p className="text-xs mt-1">IČO: 12345678</p>
-                        <p className="text-xs">Adresa: Praha 1, Václavské náměstí 1</p>
+                        <p className="mt-2"><strong>PTF reality, s.r.o.</strong></p>
+                        <p className="text-xs mt-1">IČO: 06684394</p>
+                        <p className="text-xs">Sídlo: Dřevěná 99/3, 301 00 Plzeň</p>
+                        <p className="text-xs mt-1">Zapsaná v OR Krajského soudu v Plzni, oddíl C, vložka 35601</p>
+                        <p className="text-xs mt-1">Zastoupená: Bc. David Choc, jednatel</p>
                       </div>
                       
                       <div className="p-3 bg-blue-50 rounded">

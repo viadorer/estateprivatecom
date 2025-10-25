@@ -1,0 +1,362 @@
+import { useState } from 'react'
+import { FileText, Check, Mail, AlertCircle, Lock } from 'lucide-react'
+
+const API_URL = '/api'
+
+export default function LOIModal({ isOpen, onClose, entity, entityType, currentUser, onLOISigned }) {
+  const [step, setStep] = useState(1) // 1 = LOI text, 2 = Generování kódu, 3 = Zadání kódu
+  const [agreed, setAgreed] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [generatedCode, setGeneratedCode] = useState(null)
+  const [enteredCode, setEnteredCode] = useState('')
+  const [error, setError] = useState('')
+
+  if (!isOpen || !entity) return null
+
+  const entityName = entityType === 'property' 
+    ? entity.title 
+    : `${entity.transaction_type} - ${entity.property_type}`
+
+  const handleGenerateCode = async () => {
+    if (!agreed) {
+      alert('Musíte souhlasit s LOI (Letter of Intent)')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const response = await fetch(`${API_URL}/loi/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          property_id: entityType === 'property' ? entity.id : null,
+          demand_id: entityType === 'demand' ? entity.id : null
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Chyba při generování kódu')
+      }
+
+      const data = await response.json()
+      setGeneratedCode(data.code)
+      setStep(2)
+    } catch (error) {
+      alert('Chyba: ' + error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleVerifyCode = async () => {
+    if (enteredCode.length !== 6) {
+      setError('Kód musí mít 6 znaků')
+      return
+    }
+
+    setLoading(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_URL}/loi/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          property_id: entityType === 'property' ? entity.id : null,
+          demand_id: entityType === 'demand' ? entity.id : null,
+          code: enteredCode.toUpperCase()
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Neplatný kód')
+      }
+
+      // Kód je správný - LOI podepsána
+      if (onLOISigned) {
+        onLOISigned()
+      }
+      onClose()
+      alert('LOI byla úspěšně podepsána! Nyní máte přístup k detailu.')
+      window.location.reload()
+    } catch (error) {
+      setError(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="glass-card max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-start mb-6">
+          <h2 className="text-2xl font-bold text-gradient">
+            LOI - Letter of Intent (Záměr spolupráce)
+          </h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+        </div>
+
+        {/* Krok 1: LOI text */}
+        {step === 1 && (
+          <div className="space-y-6">
+            <div className="glass-card p-6 bg-purple-50 border border-purple-200">
+              <div className="flex items-start gap-4">
+                <div className="icon-circle bg-purple-100 text-purple-600">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-purple-900 mb-3">Letter of Intent (LOI)</h3>
+                  <div className="space-y-3 text-sm text-purple-800 max-h-96 overflow-y-auto p-4 bg-white rounded-lg">
+                    <p className="font-semibold text-base">Strany:</p>
+                    
+                    <div className="grid grid-cols-2 gap-4 mt-4">
+                      <div className="p-3 bg-purple-50 rounded">
+                        <p className="font-semibold">Poskytovatel:</p>
+                        <p className="mt-2"><strong>PTF reality, s.r.o.</strong></p>
+                        <p className="text-xs mt-1">IČO: 06684394</p>
+                        <p className="text-xs">Sídlo: Dřevěná 99/3, 301 00 Plzeň</p>
+                        <p className="text-xs mt-1">Zapsaná v OR Krajského soudu v Plzni, oddíl C, vložka 35601</p>
+                        <p className="text-xs mt-1">Zastoupená: Bc. David Choc, jednatel</p>
+                      </div>
+                      
+                      <div className="p-3 bg-purple-50 rounded">
+                        <p className="font-semibold">Zájemce:</p>
+                        <p className="mt-2"><strong>{currentUser.name}</strong></p>
+                        <p className="text-xs mt-1">Email: {currentUser.email}</p>
+                        {currentUser.company && <p className="text-xs">Firma: {currentUser.company}</p>}
+                      </div>
+                    </div>
+
+                    <p className="font-semibold mt-6">Předmět zájmu:</p>
+                    <p><strong>{entityName}</strong></p>
+                    
+                    <div className="p-4 bg-blue-50 border-2 border-blue-300 rounded-lg my-4">
+                      <p className="font-semibold text-blue-900">Co je LOI?</p>
+                      <p className="text-sm text-blue-700 mt-2">
+                        Letter of Intent (Záměr spolupráce) je dokument vyjadřující váš zájem 
+                        o tuto {entityType === 'property' ? 'nemovitost' : 'poptávku'}. 
+                        Podpisem LOI získáte přístup k detailním informacím.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4 text-sm">
+                      <div>
+                        <p className="font-bold text-base mb-2">1. Smluvní strany</p>
+                        <p className="font-semibold">Poskytovatel informací:</p>
+                        <p>PTF reality, s.r.o., IČO: 06684394</p>
+                        <p>Sídlo: Dřevěná 99/3, 301 00 Plzeň</p>
+                        <p>Zastoupení: Bc. David Choc, jednatel</p>
+                        <p className="mb-2">E-mail: info@ptf.cz</p>
+                        
+                        <p className="font-semibold">Zájemce:</p>
+                        <p>{currentUser.name}</p>
+                        <p>E-mail: {currentUser.email}</p>
+                        {currentUser.company && <p>Firma: {currentUser.company}</p>}
+                        {currentUser.ico && <p>IČO: {currentUser.ico}</p>}
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">2. Účel a předmět LOI</p>
+                        <p>Účelem tohoto Letter of Intent / Dohody o záměru (dále jen "LOI") je upravit pravidla 
+                        pro poskytnutí, ochranu a využití informací vztahujících se k {entityType === 'property' ? 'nabídce nemovitosti' : 'poptávce'} 
+                        "{entityName}" a stanovit základní rámec možné transakce.</p>
+                        <p className="mt-2">Toto LOI vyjadřuje vážný zájem Zájemce dále posuzovat nabídku a případně jednat o transakci. 
+                        Ujednání o případné koupi, ceně a harmonogramu jsou nezávazná a budou předmětem vyjednání.</p>
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">3. Definice a rozsah informací</p>
+                        <p>"Důvěrné informace" znamenají veškeré informace a podklady jakékoliv povahy 
+                        (technické, obchodní, právní, finanční), které Poskytovatel informací poskytne Zájemci 
+                        v jakékoliv formě, a dále i skutečnost, že probíhají jednání o transakci.</p>
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">4. Mlčenlivost a ochrana informací (ZÁVAZNÉ)</p>
+                        <ul className="list-disc list-inside space-y-1 ml-4">
+                          <li>Zájemce bude Důvěrné informace chránit s péčí řádného hospodáře</li>
+                          <li>Důvěrné informace smí být zpřístupněny pouze osobám, které je nezbytně potřebují znát</li>
+                          <li>Důvěrné informace nebudou použity k jinému účelu než k posouzení nabídky</li>
+                          <li>Zákaz využití ke konkurenčnímu jednání či poškození Poskytovatele informací</li>
+                        </ul>
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">5. Nezávaznost obchodních ujednání</p>
+                        <p>Toto LOI nepředstavuje nabídku ve smyslu občanského zákoníku ani návrh na uzavření smlouvy. 
+                        Žádná ze Stran není povinna transakci uzavřít či v jednáních pokračovat.</p>
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">6. Ochrana osobních údajů (GDPR)</p>
+                        <p>Při zpracování osobních údajů budou Strany postupovat v souladu s Nařízením (EU) 2016/679 (GDPR) 
+                        a příslušnými právními předpisy ČR. Každá Strana vystupuje jako samostatný správce.</p>
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">7. Doba trvání a ukončení</p>
+                        <p>Toto LOI nabývá účinnosti dnem podpisu a platí na dobu 90 dnů. 
+                        Ujednání o mlčenlivosti jsou závazná a trvají i po ukončení jednání, a to po dobu 12 měsíců.</p>
+                        <p className="mt-2">Každá Strana může LOI kdykoliv ukončit písemným oznámením.</p>
+                      </div>
+
+                      <div>
+                        <p className="font-bold text-base mb-2">8. Právo a řešení sporů</p>
+                        <p>Toto LOI se řídí právem České republiky. Spory budou řešeny především smírně, 
+                        jinak pravomocí obecných soudů ČR.</p>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-amber-50 border border-amber-300 rounded-lg mt-6">
+                      <p className="font-semibold text-amber-900">Důležité upozornění:</p>
+                      <p className="text-sm text-amber-700 mt-2">
+                        LOI není závaznou smlouvou a nezakládá žádné právní závazky k uzavření transakce. 
+                    </div>
+
+                    <div>
+                      <p className="font-bold text-base mb-2">5. Nezávaznost obchodních ujednání</p>
+                      <p>Toto LOI nepředstavuje nabídku ve smyslu občanského zákoníku ani návrh na uzavření smlouvy. 
+                      Žádná ze Stran není povinna transakci uzavřít či v jednáních pokračovat.</p>
+                    </div>
+
+                    <div>
+                      <p className="font-bold text-base mb-2">6. Ochrana osobních údajů (GDPR)</p>
+                      <p>Při zpracování osobních údajů budou Strany postupovat v souladu s Nařízením (EU) 2016/679 (GDPR) 
+                      a příslušnými právními předpisy ČR. Každá Strana vystupuje jako samostatný správce.</p>
+                    </div>
+                onClick={onClose} 
+                className="btn-secondary flex-1"
+              >
+                Zrušit
+              </button>
+              <button 
+                onClick={handleGenerateCode} 
+                disabled={!agreed || loading}
+                className="btn-primary flex-1 flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Generuji kód...
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-4 h-4" />
+                    Pokračovat k podpisu
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Krok 2: Kód vygenerován */}
+        {step === 2 && (
+          <div className="space-y-6">
+            <div className="glass-card p-6 bg-green-50 border border-green-200">
+              <div className="flex items-start gap-4">
+                <div className="icon-circle bg-green-100 text-green-600">
+                  <Check className="w-6 h-6" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-green-900 mb-2">Kód byl odeslán</h3>
+                  <p className="text-sm text-green-700">
+                    Na vaši emailovou adresu <strong>{currentUser.email}</strong> byl odeslán 6-místný ověřovací kód.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Zobrazit kód pro testování */}
+            {generatedCode && (
+              <div className="glass-card p-6 bg-blue-50 border-2 border-blue-300">
+                <div className="flex items-start gap-4">
+                  <div className="icon-circle bg-blue-100 text-blue-600">
+                    <Lock className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-bold text-blue-900 mb-2">Pro testování:</h3>
+                    <p className="text-3xl font-bold text-blue-600 font-mono tracking-wider text-center py-4">
+                      {generatedCode}
+                    </p>
+                    <p className="text-xs text-blue-700 text-center">
+                      (V produkci by kód byl odeslán pouze emailem)
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-gray-700">
+                Zadejte 6-místný kód z emailu:
+              </label>
+              <input
+                type="text"
+                value={enteredCode}
+                onChange={(e) => {
+                  const value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+                  if (value.length <= 6) {
+                    setEnteredCode(value)
+                    setError('')
+                  }
+                }}
+                placeholder="XXXXXX"
+                className="glass-input text-center text-2xl font-bold tracking-widest font-mono"
+                maxLength={6}
+                autoFocus
+              />
+              <p className="text-center text-sm text-gray-500">
+                {enteredCode.length}/6 znaků
+              </p>
+
+              {error && (
+                <div className="glass-card p-4 bg-red-50 border border-red-200">
+                  <div className="flex items-center gap-2 text-red-700">
+                    <AlertCircle className="w-5 h-5" />
+                    <span className="text-sm font-medium">{error}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setStep(1)} 
+                className="btn-secondary flex-1"
+              >
+                Zpět
+              </button>
+              <button 
+                onClick={handleVerifyCode} 
+                disabled={enteredCode.length !== 6 || loading}
+                className="btn-primary flex-1 flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Ověřuji...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Podepsat LOI
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="glass-card p-4 bg-gray-50">
+              <p className="text-xs text-gray-600 text-center">
+                <strong>Tip:</strong> Pokud jste kód neobdrželi, zkontrolujte složku SPAM nebo požádejte o nový kód.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

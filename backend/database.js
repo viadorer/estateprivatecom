@@ -109,6 +109,7 @@ db.exec(`
     
     furnished TEXT,
     has_balcony INTEGER DEFAULT 0,
+    has_loggia INTEGER DEFAULT 0,
     has_terrace INTEGER DEFAULT 0,
     has_cellar INTEGER DEFAULT 0,
     has_garage INTEGER DEFAULT 0,
@@ -119,6 +120,10 @@ db.exec(`
     
     energy_rating TEXT,
     heating_type TEXT,
+    
+    is_auction INTEGER DEFAULT 0,
+    exclusively_at_rk INTEGER DEFAULT 0,
+    attractive_offer INTEGER DEFAULT 0,
     
     agent_id INTEGER NOT NULL,
     status TEXT DEFAULT 'active',
@@ -142,6 +147,40 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
     FOREIGN KEY (agent_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  -- Registrační žádosti (waitlist)
+  CREATE TABLE IF NOT EXISTS registration_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    
+    name TEXT NOT NULL,
+    surname TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    phone TEXT NOT NULL,
+    
+    address_street TEXT,
+    address_city TEXT,
+    address_zip TEXT,
+    
+    ico TEXT,
+    dic TEXT,
+    company TEXT,
+    company_position TEXT,
+    
+    requested_role TEXT NOT NULL,
+    user_type TEXT NOT NULL,
+    demand_description TEXT,
+    
+    status TEXT DEFAULT 'pending',
+    admin_notes TEXT,
+    
+    approved_by INTEGER,
+    approved_at DATETIME,
+    
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (approved_by) REFERENCES users(id)
   );
 
   -- Poptávky

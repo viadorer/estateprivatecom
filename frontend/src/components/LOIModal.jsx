@@ -1,21 +1,60 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { FileText, Check, Mail, AlertCircle, Lock } from 'lucide-react'
 
 const API_URL = '/api'
 
 export default function LOIModal({ isOpen, onClose, entity, entityType, currentUser, onLOISigned }) {
-  const [step, setStep] = useState(1) // 1 = LOI text, 2 = Generování kódu, 3 = Zadání kódu
+  const [step, setStep] = useState(0) // 0 = Úvodní vysvětlení, 1 = LOI text, 2 = Generování kódu, 3 = Zadání kódu
   const [agreed, setAgreed] = useState(false)
+  const [agreedToCreate, setAgreedToCreate] = useState(false)
   const [loading, setLoading] = useState(false)
   const [generatedCode, setGeneratedCode] = useState(null)
   const [enteredCode, setEnteredCode] = useState('')
   const [error, setError] = useState('')
+  const [contractTemplate, setContractTemplate] = useState(null)
+  const [loadingTemplate, setLoadingTemplate] = useState(true)
 
   if (!isOpen || !entity) return null
+
+  // Načíst šablonu LOI z databáze
+  useEffect(() => {
+    if (isOpen) {
+      setLoadingTemplate(true)
+      fetch(`${API_URL}/contract-templates/loi`)
+        .then(res => res.json())
+        .then(data => {
+          setContractTemplate(data)
+          setLoadingTemplate(false)
+        })
+        .catch(err => {
+          console.error('Chyba při načítání šablony:', err)
+          setLoadingTemplate(false)
+        })
+    }
+  }, [isOpen])
 
   const entityName = entityType === 'property' 
     ? entity.title 
     : `${entity.transaction_type} - ${entity.property_type}`
+
+  // Nahradit placeholdery v šabloně
+  const renderContract = () => {
+    if (!contractTemplate) return ''
+    
+    let text = contractTemplate.template_content
+    
+    // Nahradit placeholdery
+    text = text.replace(/{{user_name}}/g, currentUser.name || '')
+    text = text.replace(/{{user_email}}/g, currentUser.email || '')
+    text = text.replace(/{{user_company}}/g, currentUser.company ? `Firma: ${currentUser.company}` : '')
+    text = text.replace(/{{user_ico}}/g, currentUser.ico ? `IČO: ${currentUser.ico}` : '')
+    text = text.replace(/{{entity_type}}/g, entityType === 'property' ? 'nabídce nemovitosti' : 'poptávce')
+    text = text.replace(/{{entity_name}}/g, entityName)
+    text = text.replace(/{{signature_date}}/g, new Date().toLocaleDateString('cs-CZ'))
+    text = text.replace(/{{signature_time}}/g, new Date().toLocaleTimeString('cs-CZ'))
+    
+    return text
+  }
 
   const handleGenerateCode = async () => {
     if (!agreed) {
@@ -76,12 +115,14 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
       }
 
       // Kód je správný - LOI podepsána
+      alert('LOI byla úspěšně podepsána a odeslána na váš email! Nyní máte přístup k detailu.')
+      
       if (onLOISigned) {
         onLOISigned()
       }
+      
+      // Zavřít modal - detail se otevře automaticky protože už má LOI
       onClose()
-      alert('✅ LOI byla úspěšně podepsána! Nyní máte přístup k detailu.')
-      window.location.reload()
     } catch (error) {
       setError(error.message)
     } finally {
@@ -91,13 +132,130 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="glass-card max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="glass-card max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-start mb-6">
           <h2 className="text-2xl font-bold text-gradient">
-            LOI - Letter of Intent (Záměr spolupráce)
+            {step === 0 ? 'Přístup k detailním informacím' : 'Letter of Intent (LOI)'}
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
         </div>
+
+        {/* Krok 0: Úvodní vysvětlení */}
+        {step === 0 && (
+          <div className="space-y-6">
+            <div className="glass-card p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+              <div className="flex items-start gap-4">
+                <div className="icon-circle bg-blue-100 text-blue-600">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-xl font-bold text-blue-900 mb-4">Proč potřebujeme LOI?</h3>
+                  
+                  <div className="space-y-4 text-gray-800">
+                    <p className="leading-relaxed">
+                      Tato {entityType === 'property' ? 'nabídka' : 'poptávka'} obsahuje <strong>důvěrné informace</strong>, 
+                      které nejsou veřejně dostupné. Jedná se o off-market příležitost s citlivými údaji o ceně, 
+                      kontaktech a dalších detailech.
+                    </p>
+
+                    <div className="glass-card p-4 bg-white">
+                      <h4 className="font-bold text-blue-900 mb-3">Co získáte podpisem LOI:</h4>
+                      <ul className="space-y-2 text-sm">
+                        <li className="flex items-start gap-2">
+                          <Check className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                          <span><strong>Přístup k detailům:</strong> Kompletní informace o {entityType === 'property' ? 'nemovitosti' : 'poptávce'}, fotografie, dokumenty</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <Check className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                          <span><strong>Kontaktní údaje:</strong> Přímý kontakt na agenta nebo vlastníka</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <Check className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                          <span><strong>Možnost jednání:</strong> Zahájení vyjednávání o transakci</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <Check className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                          <span><strong>Prioritní přístup:</strong> Budete mezi prvními, kdo se dozví o aktualizacích</span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div className="glass-card p-4 bg-amber-50 border border-amber-200">
+                      <h4 className="font-bold text-amber-900 mb-3">Vaše závazky:</h4>
+                      <ul className="space-y-2 text-sm text-amber-800">
+                        <li className="flex items-start gap-2">
+                          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                          <span><strong>Mlčenlivost:</strong> Nesdílet získané informace s třetími stranami</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                          <span><strong>Účelnost:</strong> Použít informace pouze pro posouzení této příležitosti</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                          <span><strong>Ochrana dat:</strong> Respektovat GDPR a ochranu osobních údajů</span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div className="glass-card p-4 bg-green-50 border border-green-200">
+                      <h4 className="font-bold text-green-900 mb-2">Důležité informace:</h4>
+                      <ul className="space-y-1 text-sm text-green-800">
+                        <li>• LOI <strong>není závazná smlouva</strong> k uzavření transakce</li>
+                        <li>• Můžete ji kdykoliv ukončit bez udání důvodu</li>
+                        <li>• Platnost: 90 dnů od podpisu</li>
+                        <li>• Podpis probíhá elektronicky pomocí kódu z emailu</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="glass-card p-5 bg-purple-50 border-2 border-purple-300">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input 
+                  type="checkbox"
+                  checked={agreedToCreate}
+                  onChange={(e) => setAgreedToCreate(e.target.checked)}
+                  className="mt-1 w-5 h-5 rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-800">
+                  <strong className="text-purple-900">Potvrzuji, že:</strong>
+                  <ul className="mt-2 space-y-1 ml-4">
+                    <li>• Rozumím účelu a podmínkám Letter of Intent</li>
+                    <li>• Mám vážný zájem o tuto {entityType === 'property' ? 'nemovitost' : 'poptávku'}</li>
+                    <li>• Souhlasím s vytvořením LOI a zobrazením právního dokumentu</li>
+                    <li>• Zavazuji se chránit důvěrné informace</li>
+                  </ul>
+                </span>
+              </label>
+            </div>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={onClose} 
+                className="btn-secondary flex-1"
+              >
+                Zrušit
+              </button>
+              <button 
+                onClick={() => {
+                  if (!agreedToCreate) {
+                    alert('Musíte potvrdit souhlas s vytvořením LOI')
+                    return
+                  }
+                  setStep(1)
+                }}
+                disabled={!agreedToCreate}
+                className="btn-primary flex-1 flex items-center justify-center gap-2"
+              >
+                <FileText className="w-5 h-5" />
+                Pokračovat k LOI
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Krok 1: LOI text */}
         {step === 1 && (
@@ -109,89 +267,52 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
                 </div>
                 <div className="flex-1">
                   <h3 className="text-lg font-bold text-purple-900 mb-3">Letter of Intent (LOI)</h3>
-                  <div className="space-y-3 text-sm text-purple-800 max-h-96 overflow-y-auto p-4 bg-white rounded-lg">
-                    <p className="font-semibold text-base">Strany:</p>
-                    
-                    <div className="grid grid-cols-2 gap-4 mt-4">
-                      <div className="p-3 bg-purple-50 rounded">
-                        <p className="font-semibold">Poskytovatel:</p>
-                        <p className="mt-2"><strong>Estate Private s.r.o.</strong></p>
-                        <p className="text-xs mt-1">IČO: 12345678</p>
-                        <p className="text-xs">Adresa: Praha 1, Václavské náměstí 1</p>
-                      </div>
-                      
-                      <div className="p-3 bg-purple-50 rounded">
-                        <p className="font-semibold">Zájemce:</p>
-                        <p className="mt-2"><strong>{currentUser.name}</strong></p>
-                        <p className="text-xs mt-1">Email: {currentUser.email}</p>
-                        {currentUser.company && <p className="text-xs">Firma: {currentUser.company}</p>}
-                      </div>
+                  
+                  {loadingTemplate ? (
+                    <div className="p-8 text-center">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto"></div>
+                      <p className="mt-4 text-purple-700">Načítám smlouvu...</p>
                     </div>
+                  ) : (
+                    <div className="space-y-3 text-sm text-gray-800 max-h-96 overflow-y-auto p-4 bg-white rounded-lg border border-gray-200">
+                      <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed">
+                        {renderContract()}
+                      </pre>
+                    </div>
+                  )}
 
-                    <p className="font-semibold mt-6">Předmět zájmu:</p>
-                    <p><strong>{entityName}</strong></p>
-                    
-                    <div className="p-4 bg-blue-50 border-2 border-blue-300 rounded-lg my-4">
-                      <p className="font-semibold text-blue-900">📝 Co je LOI?</p>
+                  {!loadingTemplate && (
+                    <div className="p-4 bg-blue-50 border-2 border-blue-300 rounded-lg mt-4">
+                      <p className="font-semibold text-blue-900">Co je LOI?</p>
                       <p className="text-sm text-blue-700 mt-2">
-                        Letter of Intent (Záměr spolupráce) je dokument vyjadřující váš zájem 
+                        Letter of Intent (Záměr spolupráce) je právní dokument vyjadřující váš vážný zájem 
                         o tuto {entityType === 'property' ? 'nemovitost' : 'poptávku'}. 
-                        Podpisem LOI získáte přístup k detailním informacím.
+                        Podpisem LOI získáte přístup k detailním informacím a zavážete se k ochraně důvěrných údajů.
                       </p>
                     </div>
+                  )}
 
-                    <p className="font-semibold mt-4">1. Účel LOI:</p>
-                    <ul className="list-disc list-inside space-y-1 ml-4">
-                      <li>Vyjádření vážného zájmu o {entityType === 'property' ? 'nemovitost' : 'poptávku'}</li>
-                      <li>Získání přístupu k detailním informacím a kontaktům</li>
-                      <li>Ochrana dat před neoprávněným přístupem</li>
-                      <li>Zajištění GDPR compliance</li>
-                    </ul>
-
-                    <p className="font-semibold mt-4">2. Vaše práva:</p>
-                    <ul className="list-disc list-inside space-y-1 ml-4">
-                      <li>Přístup k detailním informacím o {entityType === 'property' ? 'nemovitosti' : 'poptávce'}</li>
-                      <li>Kontakt na agenta/vlastníka</li>
-                      <li>Možnost sjednání prohlídky</li>
-                      <li>Možnost zahájení jednání</li>
-                    </ul>
-
-                    <p className="font-semibold mt-4">3. Vaše povinnosti:</p>
-                    <ul className="list-disc list-inside space-y-1 ml-4">
-                      <li>Zachování mlčenlivosti o získaných informacích</li>
-                      <li>Nepoužívání informací k jiným účelům než k jednání</li>
-                      <li>Respektování GDPR a ochrany osobních údajů</li>
-                    </ul>
-
-                    <p className="font-semibold mt-4">4. Platnost:</p>
-                    <p className="ml-4">LOI je platná po dobu vašeho zájmu o {entityType === 'property' ? 'nemovitost' : 'poptávku'}.</p>
-
-                    <p className="font-semibold mt-4">5. Ukončení:</p>
-                    <p className="ml-4">LOI může být kdykoliv ukončena kteroukoli stranou bez udání důvodu.</p>
-
-                    <div className="p-4 bg-amber-50 border border-amber-300 rounded-lg mt-6">
-                      <p className="font-semibold text-amber-900">⚠️ Důležité upozornění:</p>
-                      <p className="text-sm text-amber-700 mt-2">
-                        LOI není závaznou smlouvou a nezakládá žádné právní závazky k uzavření transakce. 
-                        Slouží pouze k vyjádření zájmu a získání přístupu k informacím.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 p-4 bg-white rounded-lg border-2 border-purple-200">
+                  <div className="mt-6 p-5 bg-purple-50 rounded-lg border-2 border-purple-300">
                     <label className="flex items-start gap-3 cursor-pointer">
                       <input 
-                        type="checkbox" 
-                        checked={agreed} 
+                        type="checkbox"
+                        checked={agreed}
                         onChange={(e) => setAgreed(e.target.checked)}
-                        className="mt-1 w-5 h-5 text-purple-600 rounded focus:ring-purple-500"
+                        className="mt-1 w-5 h-5 rounded border-gray-300"
                       />
-                      <span className="text-sm text-gray-700">
-                        <strong>Souhlasím s LOI (Letter of Intent)</strong> a potvrzuji, 
-                        že jsem si přečetl(a) všechny podmínky a zavazuji se je dodržovat.
+                      <span className="text-sm text-gray-800">
+                        <strong className="text-purple-900">Prohlašuji, že:</strong>
+                        <ul className="mt-2 space-y-1 ml-4">
+                          <li>• Přečetl(a) jsem si celý text Letter of Intent / Dohody o záměru</li>
+                          <li>• Rozumím všem ustanovením a jejich právním důsledkům</li>
+                          <li>• Zavazuji se dodržovat povinnost mlčenlivosti a ochrany důvěrných informací</li>
+                          <li>• Souhlasím se zpracováním osobních údajů dle GDPR</li>
+                          <li>• Beru na vědomí, že LOI je v části mlčenlivosti právně závazná</li>
+                        </ul>
                       </span>
                     </label>
                   </div>
+
                 </div>
               </div>
             </div>
