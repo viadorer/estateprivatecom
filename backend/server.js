@@ -884,13 +884,24 @@ app.post('/api/properties', (req, res) => {
       is_auction, exclusively_at_rk, attractive_offer,
       agent_id, images, main_image, documents,
       video_url, video_tour_url, matterport_url, floor_plans, website_url,
-      user_role
+      user_role, validity_days
     } = req.body;
 
     // Určení statusu podle role:
     // - Admin může vytvořit nemovitost přímo jako 'active'
     // - Agent vytváří nemovitost jako 'pending' (čeká na schválení adminem)
     const initialStatus = user_role === 'admin' ? 'active' : 'pending';
+    
+    // Nastavit platnost - použít vlastní hodnotu nebo výchozí 14 dní
+    // Pokud je 0, nastavit null (bez omezení)
+    const daysToAdd = validity_days !== undefined ? validity_days : 14
+    let validUntilStr = null
+    if (daysToAdd > 0) {
+      const validUntil = new Date()
+      validUntil.setDate(validUntil.getDate() + daysToAdd)
+      validUntilStr = validUntil.toISOString()
+    }
+    const now = new Date().toISOString()
 
     const result = db.prepare(`
       INSERT INTO properties (
@@ -906,8 +917,8 @@ app.post('/api/properties', (req, res) => {
         images, main_image, documents,
         video_url, video_tour_url, matterport_url, floor_plans, website_url,
         has_loggia, is_auction, exclusively_at_rk, attractive_offer,
-        sreality_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sreality_id, valid_until, last_confirmed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       title, description, transaction_type, property_type, property_subtype || null,
       null, null, null, // commission fields - nastaví admin při schvalování
@@ -925,7 +936,9 @@ app.post('/api/properties', (req, res) => {
       floor_plans ? JSON.stringify(floor_plans) : null,
       website_url || null,
       has_loggia || 0, is_auction || 0, exclusively_at_rk || 0, attractive_offer || 0,
-      null // sreality_id
+      null, // sreality_id
+      validUntilStr, // valid_until
+      now // last_confirmed_at
     );
 
     const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(result.lastInsertRowid);
@@ -1127,9 +1140,28 @@ app.get('/api/demands', (req, res) => {
     const demands = db.prepare(query).all(...params);
 
     demands.forEach(demand => {
+      // Stará struktura
       if (demand.cities) demand.cities = JSON.parse(demand.cities);
       if (demand.districts) demand.districts = JSON.parse(demand.districts);
       if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
+      // Nová struktura
+      if (demand.property_requirements) demand.property_requirements = JSON.parse(demand.property_requirements);
+      if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
+      if (demand.locations) demand.locations = JSON.parse(demand.locations);
+      
+      // Agent nevidí kontaktní údaje - musí požádat o přístup
+      if (userRole === 'agent') {
+        delete demand.client_name;
+        delete demand.client_email;
+        delete demand.client_phone;
+        // Skrýt přesné lokality - zobrazit jen okresy/kraje
+        if (demand.locations && Array.isArray(demand.locations)) {
+          demand.locations = demand.locations.map(loc => ({
+            district: loc.district,
+            region: loc.region
+          }));
+        }
+      }
     });
 
     res.json(demands);
@@ -1157,9 +1189,28 @@ app.get('/api/demands/:id', (req, res) => {
       logAction(req.query.user_id, 'view', 'demand', req.params.id, `Zobrazení poptávky: ${demand.transaction_type} ${demand.property_type}`, req);
     }
 
+    // Stará struktura
     if (demand.cities) demand.cities = JSON.parse(demand.cities);
     if (demand.districts) demand.districts = JSON.parse(demand.districts);
     if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
+    // Nová struktura
+    if (demand.property_requirements) demand.property_requirements = JSON.parse(demand.property_requirements);
+    if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
+    if (demand.locations) demand.locations = JSON.parse(demand.locations);
+    
+    // Agent nevidí kontaktní údaje - musí požádat o přístup
+    if (req.query.userRole === 'agent') {
+      delete demand.client_name;
+      delete demand.client_email;
+      delete demand.client_phone;
+      // Skrýt přesné lokality - zobrazit jen okresy/kraje
+      if (demand.locations && Array.isArray(demand.locations)) {
+        demand.locations = demand.locations.map(loc => ({
+          district: loc.district,
+          region: loc.region
+        }));
+      }
+    }
 
     res.json(demand);
   } catch (error) {
@@ -1167,65 +1218,121 @@ app.get('/api/demands/:id', (req, res) => {
   }
 });
 
-// Vytvořit poptávku (multi-demand support)
+// Vytvořit poptávku (multi-demand support s flexibilními vlastnostmi)
 app.post('/api/demands', (req, res) => {
   try {
     const {
-      client_id, transaction_type, property_type, property_subtype,
-      transaction_types, property_types, // Multi-select pole
+      client_id, 
+      // Nová flexibilní struktura
+      property_requirements, // Array objektů s různými vlastnostmi pro každý typ
+      common_filters, // Společné filtry (cena, lokace)
+      // Stará struktura pro zpětnou kompatibilitu
+      transaction_type, property_type, property_subtype,
+      transaction_types, property_types,
       price_min, price_max, cities, districts,
       area_min, area_max, rooms_min, rooms_max,
-      floor_min, floor_max, required_features, email_notifications, user_role
+      floor_min, floor_max, required_features, 
+      email_notifications, user_role, validity_days
     } = req.body;
 
     // Určení statusu podle role:
     // - Admin může vytvořit poptávku přímo jako 'active'
     // - Agent i Klient vytváří poptávku jako 'pending' (čeká na schválení adminem)
     const initialStatus = user_role === 'admin' ? 'active' : 'pending';
-
-    // Pokud jsou vybrány multi-typy, vytvoříme více poptávek
-    const transactionTypesToCreate = transaction_types && transaction_types.length > 0 ? transaction_types : [transaction_type];
-    const propertyTypesToCreate = property_types && property_types.length > 0 ? property_types : [property_type];
-
-    const createdDemands = [];
-
-    // Vytvoření poptávky pro každou kombinaci transaction_type x property_type
-    for (const transType of transactionTypesToCreate) {
-      for (const propType of propertyTypesToCreate) {
-        const result = db.prepare(`
-          INSERT INTO demands (
-            client_id, transaction_type, property_type, property_subtype,
-            price_min, price_max, cities, districts,
-            area_min, area_max, rooms_min, rooms_max,
-            floor_min, floor_max, required_features, email_notifications, status
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          client_id, transType, propType, property_subtype,
-          price_min, price_max,
-          cities ? JSON.stringify(cities) : null,
-          districts ? JSON.stringify(districts) : null,
-          area_min, area_max, rooms_min, rooms_max,
-          floor_min, floor_max,
-          required_features ? JSON.stringify(required_features) : null,
-          email_notifications !== undefined ? email_notifications : 1,
-          initialStatus
-        );
-
-        const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
-        if (demand.cities) demand.cities = JSON.parse(demand.cities);
-        if (demand.districts) demand.districts = JSON.parse(demand.districts);
-        if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
-
-        createdDemands.push(demand);
-
-        // Log vytvoření
-        const statusNote = initialStatus === 'pending' ? ' (čeká na schválení)' : '';
-        logAction(client_id, 'create', 'demand', result.lastInsertRowid, `Vytvořena poptávka: ${transType} ${propType}${statusNote}`, req);
-      }
+    
+    // Nastavit platnost - použít vlastní hodnotu nebo výchozí 30 dní
+    // Pokud je 0, nastavit null (bez omezení)
+    const daysToAdd = validity_days !== undefined ? validity_days : 30
+    let validUntilStr = null
+    if (daysToAdd > 0) {
+      const validUntil = new Date()
+      validUntil.setDate(validUntil.getDate() + daysToAdd)
+      validUntilStr = validUntil.toISOString()
     }
+    const now = new Date().toISOString()
 
-    // Vrátíme všechny vytvořené poptávky (nebo jen první pro zpětnou kompatibilitu)
-    res.status(201).json(createdDemands.length === 1 ? createdDemands[0] : { demands: createdDemands, count: createdDemands.length });
+    // NOVÁ LOGIKA: Pokud jsou property_requirements, použít flexibilní strukturu
+    if (property_requirements && property_requirements.length > 0) {
+      // Pro zpětnou kompatibilitu nastavit transaction_type a property_type z prvního požadavku
+      const firstReq = property_requirements[0];
+      
+      // Jedna poptávka s více konfiguracemi typů nemovitostí
+      const result = db.prepare(`
+        INSERT INTO demands (
+          client_id, transaction_type, property_type, property_subtype,
+          property_requirements, common_filters, locations,
+          email_notifications, status, valid_until, last_confirmed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        client_id,
+        firstReq.transaction_type || 'sale',
+        firstReq.property_type || 'flat',
+        firstReq.property_subtype || null,
+        JSON.stringify(property_requirements),
+        JSON.stringify(common_filters || {}),
+        JSON.stringify(req.body.locations || []),
+        email_notifications !== undefined ? email_notifications : 1,
+        initialStatus,
+        validUntilStr,
+        now
+      );
+
+      const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
+      if (demand.property_requirements) demand.property_requirements = JSON.parse(demand.property_requirements);
+      if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
+      if (demand.locations) demand.locations = JSON.parse(demand.locations);
+
+      const typesStr = property_requirements.map(r => `${r.transaction_type} ${r.property_type}`).join(', ');
+      const statusNote = initialStatus === 'pending' ? ' (čeká na schválení)' : '';
+      logAction(client_id, 'create', 'demand', result.lastInsertRowid, `Vytvořena flexibilní poptávka: ${typesStr}${statusNote}`, req);
+
+      res.status(201).json(demand);
+    } 
+    // STARÁ LOGIKA: Zpětná kompatibilita
+    else {
+      const transactionTypesToCreate = transaction_types && transaction_types.length > 0 ? transaction_types : [transaction_type];
+      const propertyTypesToCreate = property_types && property_types.length > 0 ? property_types : [property_type];
+
+      const createdDemands = [];
+
+      for (const transType of transactionTypesToCreate) {
+        for (const propType of propertyTypesToCreate) {
+          const result = db.prepare(`
+            INSERT INTO demands (
+              client_id, transaction_type, property_type, property_subtype,
+              price_min, price_max, cities, districts,
+              area_min, area_max, rooms_min, rooms_max,
+              floor_min, floor_max, required_features, email_notifications, status,
+              valid_until, last_confirmed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            client_id, transType, propType, property_subtype,
+            price_min, price_max,
+            cities ? JSON.stringify(cities) : null,
+            districts ? JSON.stringify(districts) : null,
+            area_min, area_max, rooms_min, rooms_max,
+            floor_min, floor_max,
+            required_features ? JSON.stringify(required_features) : null,
+            email_notifications !== undefined ? email_notifications : 1,
+            initialStatus,
+            validUntilStr,
+            now
+          );
+
+          const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
+          if (demand.cities) demand.cities = JSON.parse(demand.cities);
+          if (demand.districts) demand.districts = JSON.parse(demand.districts);
+          if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
+
+          createdDemands.push(demand);
+
+          const statusNote = initialStatus === 'pending' ? ' (čeká na schválení)' : '';
+          logAction(client_id, 'create', 'demand', result.lastInsertRowid, `Vytvořena poptávka: ${transType} ${propType}${statusNote}`, req);
+        }
+      }
+
+      res.status(201).json(createdDemands.length === 1 ? createdDemands[0] : { demands: createdDemands, count: createdDemands.length });
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1235,41 +1342,88 @@ app.post('/api/demands', (req, res) => {
 app.put('/api/demands/:id', (req, res) => {
   try {
     const {
-      transaction_type, property_type, property_subtype,
-      price_min, price_max, cities, districts,
-      area_min, area_max, rooms_min, rooms_max,
-      floor_min, floor_max, required_features, status, email_notifications
+      property_requirements,
+      common_filters,
+      locations,
+      status,
+      email_notifications
     } = req.body;
 
-    db.prepare(`
-      UPDATE demands SET
-        transaction_type = ?, property_type = ?, property_subtype = ?,
-        price_min = ?, price_max = ?, cities = ?, districts = ?,
-        area_min = ?, area_max = ?, rooms_min = ?, rooms_max = ?,
-        floor_min = ?, floor_max = ?, required_features = ?, status = ?, email_notifications = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
-      transaction_type, property_type, property_subtype,
-      price_min, price_max,
-      cities ? JSON.stringify(cities) : null,
-      districts ? JSON.stringify(districts) : null,
-      area_min, area_max, rooms_min, rooms_max,
-      floor_min, floor_max,
-      required_features ? JSON.stringify(required_features) : null,
-      status, email_notifications,
-      req.params.id
-    );
+    // Nová flexibilní struktura
+    if (property_requirements && property_requirements.length > 0) {
+      const firstReq = property_requirements[0];
+      
+      db.prepare(`
+        UPDATE demands SET
+          transaction_type = ?,
+          property_type = ?,
+          property_subtype = ?,
+          property_requirements = ?,
+          common_filters = ?,
+          locations = ?,
+          status = ?,
+          email_notifications = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        firstReq.transaction_type || 'sale',
+        firstReq.property_type || 'flat',
+        firstReq.property_subtype || null,
+        JSON.stringify(property_requirements),
+        JSON.stringify(common_filters || {}),
+        JSON.stringify(locations || []),
+        status || 'active',
+        email_notifications !== undefined ? email_notifications : 1,
+        req.params.id
+      );
 
-    const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(req.params.id);
-    if (demand.cities) demand.cities = JSON.parse(demand.cities);
-    if (demand.districts) demand.districts = JSON.parse(demand.districts);
-    if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
+      const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(req.params.id);
+      if (demand.property_requirements) demand.property_requirements = JSON.parse(demand.property_requirements);
+      if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
+      if (demand.locations) demand.locations = JSON.parse(demand.locations);
 
-    // Log úpravy
-    logAction(demand.client_id, 'update', 'demand', req.params.id, `Upravena poptávka: ${transaction_type} ${property_type}`, req);
+      const typesStr = property_requirements.map(r => `${r.transaction_type} ${r.property_type}`).join(', ');
+      logAction(demand.client_id, 'update', 'demand', req.params.id, `Upravena poptávka: ${typesStr}`, req);
 
-    res.json(demand);
+      res.json(demand);
+    } else {
+      // Stará struktura - pro zpětnou kompatibilitu
+      const {
+        transaction_type, property_type, property_subtype,
+        price_min, price_max, cities, districts,
+        area_min, area_max, rooms_min, rooms_max,
+        floor_min, floor_max, required_features
+      } = req.body;
+
+      db.prepare(`
+        UPDATE demands SET
+          transaction_type = ?, property_type = ?, property_subtype = ?,
+          price_min = ?, price_max = ?, cities = ?, districts = ?,
+          area_min = ?, area_max = ?, rooms_min = ?, rooms_max = ?,
+          floor_min = ?, floor_max = ?, required_features = ?, status = ?, email_notifications = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        transaction_type, property_type, property_subtype,
+        price_min, price_max,
+        cities ? JSON.stringify(cities) : null,
+        districts ? JSON.stringify(districts) : null,
+        area_min, area_max, rooms_min, rooms_max,
+        floor_min, floor_max,
+        required_features ? JSON.stringify(required_features) : null,
+        status, email_notifications,
+        req.params.id
+      );
+
+      const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(req.params.id);
+      if (demand.cities) demand.cities = JSON.parse(demand.cities);
+      if (demand.districts) demand.districts = JSON.parse(demand.districts);
+      if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
+
+      logAction(demand.client_id, 'update', 'demand', req.params.id, `Upravena poptávka: ${transaction_type} ${property_type}`, req);
+
+      res.json(demand);
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3176,72 +3330,167 @@ app.get('/api/properties/:id/matches', (req, res) => {
       return res.status(404).json({ error: 'Nemovitost nenalezena' });
     }
     
-    // Najít všechny aktivní poptávky stejného typu
+    // Najít všechny aktivní poptávky - nefiltrujeme podle typu, protože multi-poptávka může mít více typů
     const demands = db.prepare(`
       SELECT d.*, u.name as client_name
       FROM demands d
       LEFT JOIN users u ON d.client_id = u.id
       WHERE d.status = 'active'
-        AND d.transaction_type = ?
-        AND d.property_type = ?
-    `).all(property.transaction_type, property.property_type);
+    `).all();
     
     // Vypočítat match score pro každou poptávku
     const matches = demands.map(demand => {
       let score = 0;
-      let criteria = 0;
+      let matchedRequirement = null;
       
-      // Parse cities
-      const cities = demand.cities ? JSON.parse(demand.cities) : [];
-      const districts = demand.districts ? JSON.parse(demand.districts) : [];
+      // Parse nové struktury
+      const propertyRequirements = demand.property_requirements ? JSON.parse(demand.property_requirements) : null;
+      const commonFilters = demand.common_filters ? JSON.parse(demand.common_filters) : null;
+      const locations = demand.locations ? JSON.parse(demand.locations) : null;
       
-      // 1. Typ transakce a nemovitosti (už je filtrováno) - 20 bodů
-      score += 20;
-      criteria += 1;
-      
-      // 2. Cena - 30 bodů
-      criteria += 1;
-      if (demand.price_min && demand.price_max) {
-        if (property.price >= demand.price_min && property.price <= demand.price_max) {
-          score += 30;
-        } else if (property.price < demand.price_min) {
-          score += Math.max(0, 30 - ((demand.price_min - property.price) / demand.price_min * 30));
-        } else {
-          score += Math.max(0, 30 - ((property.price - demand.price_max) / demand.price_max * 30));
+      // NOVÁ LOGIKA: Pokud má poptávka property_requirements
+      if (propertyRequirements && propertyRequirements.length > 0) {
+        // Najít matching requirement (může jich být více typů)
+        const matchingReq = propertyRequirements.find(req => 
+          req.transaction_type === property.transaction_type && 
+          req.property_type === property.property_type
+        );
+        
+        if (!matchingReq) {
+          return null; // Tento typ nemovitosti není v poptávce
         }
-      } else {
-        score += 15; // Částečný bod pokud není rozmezí
-      }
-      
-      // 3. Lokalita - 25 bodů
-      criteria += 1;
-      if (cities.length > 0) {
-        const cityMatch = cities.some(city => property.city.toLowerCase().includes(city.toLowerCase()));
-        if (cityMatch) score += 25;
-      } else {
-        score += 12; // Částečný bod pokud není specifikováno
-      }
-      
-      // 4. Plocha - 15 bodů
-      criteria += 1;
-      if (demand.area_min && demand.area_max && property.area) {
-        if (property.area >= demand.area_min && property.area <= demand.area_max) {
+        
+        matchedRequirement = matchingReq;
+        
+        // 1. Typ transakce a nemovitosti - 20 bodů
+        score += 20;
+        
+        // Bonus za shodu podtypu - 10 bodů (podporuje array podtypů)
+        const demandSubtypes = matchingReq.property_subtypes || (matchingReq.property_subtype ? [matchingReq.property_subtype] : []);
+        
+        if (demandSubtypes.length > 0 && property.property_subtype) {
+          // Pokud poptávka má specifikované podtypy, kontrolovat shodu
+          if (demandSubtypes.includes(property.property_subtype)) {
+            score += 10;
+          }
+        } else if (demandSubtypes.length === 0) {
+          // Pokud poptávka nemá specifikovaný podtyp (jakýkoliv), přidat částečný bonus
+          score += 5;
+        }
+        
+        // 2. Cena z common_filters - 30 bodů
+        if (commonFilters?.price) {
+          const priceMin = commonFilters.price.min || 0;
+          const priceMax = commonFilters.price.max || Infinity;
+          
+          if (property.price >= priceMin && property.price <= priceMax) {
+            score += 30;
+          } else if (property.price < priceMin) {
+            score += Math.max(0, 30 - ((priceMin - property.price) / priceMin * 30));
+          } else {
+            score += Math.max(0, 30 - ((property.price - priceMax) / priceMax * 30));
+          }
+        } else {
           score += 15;
+        }
+        
+        // 3. Lokalita z locations (GPS) - 25 bodů
+        if (locations && locations.length > 0) {
+          const locationMatch = locations.some(loc => {
+            // Porovnat název města/lokality
+            if (loc.city && property.city) {
+              return property.city.toLowerCase().includes(loc.city.toLowerCase()) ||
+                     loc.city.toLowerCase().includes(property.city.toLowerCase());
+            }
+            if (loc.name && property.city) {
+              return property.city.toLowerCase().includes(loc.name.toLowerCase()) ||
+                     loc.name.toLowerCase().includes(property.city.toLowerCase());
+            }
+            return false;
+          });
+          if (locationMatch) score += 25;
         } else {
-          score += Math.max(0, 15 - Math.abs(property.area - (demand.area_min + demand.area_max) / 2) / 10);
+          score += 12;
         }
-      } else {
-        score += 7;
-      }
-      
-      // 5. Pokoje - 10 bodů
-      criteria += 1;
-      if (demand.rooms_min && demand.rooms_max && property.rooms) {
-        if (property.rooms >= demand.rooms_min && property.rooms <= demand.rooms_max) {
-          score += 10;
+        
+        // 4. Plocha z filters - 15 bodů
+        if (matchingReq.filters?.area && property.area) {
+          const areaMin = matchingReq.filters.area.min || 0;
+          const areaMax = matchingReq.filters.area.max || Infinity;
+          
+          if (property.area >= areaMin && property.area <= areaMax) {
+            score += 15;
+          } else {
+            score += Math.max(0, 15 - Math.abs(property.area - (areaMin + areaMax) / 2) / 10);
+          }
+        } else {
+          score += 7;
         }
+        
+        // 5. Pokoje z filters (pro byty) - 10 bodů
+        if (matchingReq.filters?.rooms && property.rooms) {
+          const roomsMin = matchingReq.filters.rooms.min || 0;
+          const roomsMax = matchingReq.filters.rooms.max || Infinity;
+          
+          if (property.rooms >= roomsMin && property.rooms <= roomsMax) {
+            score += 10;
+          }
+        } else {
+          score += 5;
+        }
+        
       } else {
-        score += 5;
+        // STARÁ LOGIKA: Zpětná kompatibilita
+        const cities = demand.cities ? JSON.parse(demand.cities) : [];
+        
+        // Kontrola typu
+        if (demand.transaction_type !== property.transaction_type || 
+            demand.property_type !== property.property_type) {
+          return null;
+        }
+        
+        score += 20;
+        
+        // Cena
+        if (demand.price_min && demand.price_max) {
+          if (property.price >= demand.price_min && property.price <= demand.price_max) {
+            score += 30;
+          } else if (property.price < demand.price_min) {
+            score += Math.max(0, 30 - ((demand.price_min - property.price) / demand.price_min * 30));
+          } else {
+            score += Math.max(0, 30 - ((property.price - demand.price_max) / demand.price_max * 30));
+          }
+        } else {
+          score += 15;
+        }
+        
+        // Lokalita
+        if (cities.length > 0) {
+          const cityMatch = cities.some(city => property.city.toLowerCase().includes(city.toLowerCase()));
+          if (cityMatch) score += 25;
+        } else {
+          score += 12;
+        }
+        
+        // Plocha
+        if (demand.area_min && demand.area_max && property.area) {
+          if (property.area >= demand.area_min && property.area <= demand.area_max) {
+            score += 15;
+          } else {
+            score += Math.max(0, 15 - Math.abs(property.area - (demand.area_min + demand.area_max) / 2) / 10);
+          }
+        } else {
+          score += 7;
+        }
+        
+        // Pokoje
+        if (demand.rooms_min && demand.rooms_max && property.rooms) {
+          if (property.rooms >= demand.rooms_min && property.rooms <= demand.rooms_max) {
+            score += 10;
+          }
+        } else {
+          score += 5;
+        }
       }
       
       const match_score = Math.round(score);
@@ -3249,11 +3498,13 @@ app.get('/api/properties/:id/matches', (req, res) => {
       return {
         ...demand,
         match_score,
-        cities,
-        districts
+        property_requirements: propertyRequirements,
+        common_filters: commonFilters,
+        locations: locations,
+        matched_requirement: matchedRequirement
       };
     })
-    .filter(match => match.match_score >= 50) // Jen shody nad 50%
+    .filter(match => match !== null && match.match_score >= 50) // Jen shody nad 50%
     .sort((a, b) => b.match_score - a.match_score);
     
     console.log(`✅ Found ${matches.length} matches for property ${req.params.id}`);
@@ -3275,75 +3526,169 @@ app.get('/api/demands/:id/matches', (req, res) => {
       return res.status(404).json({ error: 'Poptávka nenalezena' });
     }
     
-    // Parse cities
-    const cities = demand.cities ? JSON.parse(demand.cities) : [];
-    const districts = demand.districts ? JSON.parse(demand.districts) : [];
+    // Parse nové struktury
+    const propertyRequirements = demand.property_requirements ? JSON.parse(demand.property_requirements) : null;
+    const commonFilters = demand.common_filters ? JSON.parse(demand.common_filters) : null;
+    const locations = demand.locations ? JSON.parse(demand.locations) : null;
     
-    // Najít všechny aktivní nabídky stejného typu
+    // Najít všechny aktivní nabídky - nefiltrujeme podle typu, protože multi-poptávka může mít více typů
     const properties = db.prepare(`
       SELECT p.*, u.name as agent_name
       FROM properties p
       LEFT JOIN users u ON p.agent_id = u.id
       WHERE p.status = 'active'
-        AND p.transaction_type = ?
-        AND p.property_type = ?
-    `).all(demand.transaction_type, demand.property_type);
+    `).all();
     
     // Vypočítat match score pro každou nabídku
     const matches = properties.map(property => {
       let score = 0;
-      let criteria = 0;
+      let matchedRequirement = null;
       
       // Parse images
       const images = property.images ? JSON.parse(property.images) : [];
       
-      // 1. Typ transakce a nemovitosti (už je filtrováno) - 20 bodů
-      score += 20;
-      criteria += 1;
-      
-      // 2. Cena - 30 bodů
-      criteria += 1;
-      if (demand.price_min && demand.price_max) {
-        if (property.price >= demand.price_min && property.price <= demand.price_max) {
-          score += 30;
-        } else if (property.price < demand.price_min) {
-          score += Math.max(0, 30 - ((demand.price_min - property.price) / demand.price_min * 30));
-        } else {
-          score += Math.max(0, 30 - ((property.price - demand.price_max) / demand.price_max * 30));
+      // NOVÁ LOGIKA: Pokud má poptávka property_requirements
+      if (propertyRequirements && propertyRequirements.length > 0) {
+        // Najít matching requirement
+        const matchingReq = propertyRequirements.find(req => 
+          req.transaction_type === property.transaction_type && 
+          req.property_type === property.property_type
+        );
+        
+        if (!matchingReq) {
+          return null; // Tento typ nemovitosti není v poptávce
         }
-      } else {
-        score += 15;
-      }
-      
-      // 3. Lokalita - 25 bodů
-      criteria += 1;
-      if (cities.length > 0) {
-        const cityMatch = cities.some(city => property.city.toLowerCase().includes(city.toLowerCase()));
-        if (cityMatch) score += 25;
-      } else {
-        score += 12;
-      }
-      
-      // 4. Plocha - 15 bodů
-      criteria += 1;
-      if (demand.area_min && demand.area_max && property.area) {
-        if (property.area >= demand.area_min && property.area <= demand.area_max) {
+        
+        matchedRequirement = matchingReq;
+        
+        // 1. Typ transakce a nemovitosti - 20 bodů
+        score += 20;
+        
+        // Bonus za shodu podtypu - 10 bodů (podporuje array podtypů)
+        const demandSubtypes = matchingReq.property_subtypes || (matchingReq.property_subtype ? [matchingReq.property_subtype] : []);
+        
+        if (demandSubtypes.length > 0 && property.property_subtype) {
+          // Pokud poptávka má specifikované podtypy, kontrolovat shodu
+          if (demandSubtypes.includes(property.property_subtype)) {
+            score += 10;
+          }
+        } else if (demandSubtypes.length === 0) {
+          // Pokud poptávka nemá specifikovaný podtyp (jakýkoliv), přidat částečný bonus
+          score += 5;
+        }
+        
+        // 2. Cena z common_filters - 30 bodů
+        if (commonFilters?.price) {
+          const priceMin = commonFilters.price.min || 0;
+          const priceMax = commonFilters.price.max || Infinity;
+          
+          if (property.price >= priceMin && property.price <= priceMax) {
+            score += 30;
+          } else if (property.price < priceMin) {
+            score += Math.max(0, 30 - ((priceMin - property.price) / priceMin * 30));
+          } else {
+            score += Math.max(0, 30 - ((property.price - priceMax) / priceMax * 30));
+          }
+        } else {
           score += 15;
+        }
+        
+        // 3. Lokalita z locations - 25 bodů
+        if (locations && locations.length > 0) {
+          const locationMatch = locations.some(loc => {
+            if (loc.city && property.city) {
+              return property.city.toLowerCase().includes(loc.city.toLowerCase()) ||
+                     loc.city.toLowerCase().includes(property.city.toLowerCase());
+            }
+            if (loc.name && property.city) {
+              return property.city.toLowerCase().includes(loc.name.toLowerCase()) ||
+                     loc.name.toLowerCase().includes(property.city.toLowerCase());
+            }
+            return false;
+          });
+          if (locationMatch) score += 25;
         } else {
-          score += Math.max(0, 15 - Math.abs(property.area - (demand.area_min + demand.area_max) / 2) / 10);
+          score += 12;
         }
-      } else {
-        score += 7;
-      }
-      
-      // 5. Pokoje - 10 bodů
-      criteria += 1;
-      if (demand.rooms_min && demand.rooms_max && property.rooms) {
-        if (property.rooms >= demand.rooms_min && property.rooms <= demand.rooms_max) {
-          score += 10;
+        
+        // 4. Plocha z filters - 15 bodů
+        if (matchingReq.filters?.area && property.area) {
+          const areaMin = matchingReq.filters.area.min || 0;
+          const areaMax = matchingReq.filters.area.max || Infinity;
+          
+          if (property.area >= areaMin && property.area <= areaMax) {
+            score += 15;
+          } else {
+            score += Math.max(0, 15 - Math.abs(property.area - (areaMin + areaMax) / 2) / 10);
+          }
+        } else {
+          score += 7;
         }
+        
+        // 5. Pokoje z filters - 10 bodů
+        if (matchingReq.filters?.rooms && property.rooms) {
+          const roomsMin = matchingReq.filters.rooms.min || 0;
+          const roomsMax = matchingReq.filters.rooms.max || Infinity;
+          
+          if (property.rooms >= roomsMin && property.rooms <= roomsMax) {
+            score += 10;
+          }
+        } else {
+          score += 5;
+        }
+        
       } else {
-        score += 5;
+        // STARÁ LOGIKA: Zpětná kompatibilita
+        const cities = demand.cities ? JSON.parse(demand.cities) : [];
+        
+        // Kontrola typu
+        if (demand.transaction_type !== property.transaction_type || 
+            demand.property_type !== property.property_type) {
+          return null;
+        }
+        
+        score += 20;
+        
+        // Cena
+        if (demand.price_min && demand.price_max) {
+          if (property.price >= demand.price_min && property.price <= demand.price_max) {
+            score += 30;
+          } else if (property.price < demand.price_min) {
+            score += Math.max(0, 30 - ((demand.price_min - property.price) / demand.price_min * 30));
+          } else {
+            score += Math.max(0, 30 - ((property.price - demand.price_max) / demand.price_max * 30));
+          }
+        } else {
+          score += 15;
+        }
+        
+        // Lokalita
+        if (cities.length > 0) {
+          const cityMatch = cities.some(city => property.city.toLowerCase().includes(city.toLowerCase()));
+          if (cityMatch) score += 25;
+        } else {
+          score += 12;
+        }
+        
+        // Plocha
+        if (demand.area_min && demand.area_max && property.area) {
+          if (property.area >= demand.area_min && property.area <= demand.area_max) {
+            score += 15;
+          } else {
+            score += Math.max(0, 15 - Math.abs(property.area - (demand.area_min + demand.area_max) / 2) / 10);
+          }
+        } else {
+          score += 7;
+        }
+        
+        // Pokoje
+        if (demand.rooms_min && demand.rooms_max && property.rooms) {
+          if (property.rooms >= demand.rooms_min && property.rooms <= demand.rooms_max) {
+            score += 10;
+          }
+        } else {
+          score += 5;
+        }
       }
       
       const match_score = Math.round(score);
@@ -3351,10 +3696,11 @@ app.get('/api/demands/:id/matches', (req, res) => {
       return {
         ...property,
         match_score,
-        images
+        images,
+        matched_requirement: matchedRequirement
       };
     })
-    .filter(match => match.match_score >= 50) // Jen shody nad 50%
+    .filter(match => match !== null && match.match_score >= 50) // Jen shody nad 50%
     .sort((a, b) => b.match_score - a.match_score);
     
     console.log(`✅ Found ${matches.length} matches for demand ${req.params.id}`);

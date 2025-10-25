@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Target, Building2, Search, TrendingUp } from 'lucide-react'
+import { Target, Building2, Search, TrendingUp, Eye, Lock } from 'lucide-react'
 
 const API_URL = '/api'
 
-export default function MatchesList({ entityType, entityId, currentUser }) {
+export default function MatchesList({ entityType, entityId, currentUser, onViewDetail, onRequestAccess }) {
   const [matches, setMatches] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -91,10 +91,46 @@ export default function MatchesList({ entityType, entityId, currentUser }) {
               <div className="grid grid-cols-2 gap-2 text-sm text-gray-600">
                 {entityType === 'properties' ? (
                   <>
-                    <div>Cena: {formatPrice(match.price_min)} - {formatPrice(match.price_max)} Kč</div>
-                    <div>Pokoje: {match.rooms_min} - {match.rooms_max}</div>
-                    <div>Plocha: {match.area_min} - {match.area_max} m²</div>
-                    <div>Lokace: {match.cities?.join(', ') || 'Různé'}</div>
+                    {/* Zobrazení poptávky - nová struktura */}
+                    {match.common_filters?.price ? (
+                      <div>
+                        Cena: {match.common_filters.price.min ? formatPrice(match.common_filters.price.min) : '0'} - {match.common_filters.price.max ? formatPrice(match.common_filters.price.max) : '∞'} Kč
+                      </div>
+                    ) : match.price_min ? (
+                      <div>Cena: {formatPrice(match.price_min)} - {formatPrice(match.price_max)} Kč</div>
+                    ) : null}
+                    
+                    {match.property_requirements && match.property_requirements.length > 0 ? (
+                      <div className="col-span-2">
+                        Typy: {match.property_requirements.map(req => {
+                          const typeLabel = req.property_type === 'flat' ? 'Byt' : 
+                                          req.property_type === 'house' ? 'Dům' : 
+                                          req.property_type === 'commercial' ? 'Komerční' : 
+                                          req.property_type === 'land' ? 'Pozemek' : 'Projekt';
+                          const subtypes = req.property_subtypes || (req.property_subtype ? [req.property_subtype] : []);
+                          return subtypes.length > 0 ? `${typeLabel} (${subtypes.join(', ')})` : typeLabel;
+                        }).join(' | ')}
+                      </div>
+                    ) : null}
+                    
+                    {match.locations && Array.isArray(match.locations) && match.locations.length > 0 ? (
+                      <div className="col-span-2">
+                        Lokality: {match.locations.map(l => l.name).join(', ')}
+                      </div>
+                    ) : match.cities ? (
+                      <div className="col-span-2">Lokace: {match.cities.join(', ')}</div>
+                    ) : null}
+                    
+                    {match.matched_requirement && (
+                      <div className="col-span-2 text-xs text-purple-600">
+                        Matchuje s: {match.matched_requirement.property_type}
+                        {(() => {
+                          const subtypes = match.matched_requirement.property_subtypes || 
+                                         (match.matched_requirement.property_subtype ? [match.matched_requirement.property_subtype] : []);
+                          return subtypes.length > 0 ? ` (${subtypes.join(', ')})` : '';
+                        })()}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -106,11 +142,34 @@ export default function MatchesList({ entityType, entityId, currentUser }) {
                 )}
               </div>
 
-              {currentUser?.role === 'admin' && (
-                <div className="mt-2 pt-2 border-t border-gray-200 text-xs text-gray-500">
-                  Klient: {match.client_name || match.agent_name}
+              {/* Tlačítka pro akce */}
+              <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between">
+                {currentUser?.role === 'admin' && (
+                  <div className="text-xs text-gray-500">
+                    {entityType === 'properties' ? 'Klient' : 'Agent'}: {match.client_name || match.agent_name}
+                  </div>
+                )}
+                
+                <div className="flex gap-2 ml-auto">
+                  {currentUser?.role === 'admin' ? (
+                    <button
+                      onClick={() => onViewDetail && onViewDetail(match)}
+                      className="glass-button-secondary px-3 py-1.5 text-sm rounded-full flex items-center gap-1"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      Detail
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onRequestAccess && onRequestAccess(match)}
+                      className="glass-button-secondary px-3 py-1.5 text-sm rounded-full flex items-center gap-1"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      Požádat o detail
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           ))}
         </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Building2, Home, Search, Users as UsersIcon, LogOut, Building, Heart, Calendar, Edit, Pause, Play, Grid, List, Clock, User, FileText, Image as ImageIcon, Upload, X, Check, AlertCircle, Mail, Map } from 'lucide-react'
+import { Building2, Home, Search, Users as UsersIcon, LogOut, Building, Heart, Calendar, Edit, Pause, Play, Grid, List, Clock, User, FileText, Image as ImageIcon, Upload, X, Check, AlertCircle, Mail, Map, Plus, Trash2, MapPin, Lock } from 'lucide-react'
 import { LABELS_CS } from './constants'
 import GDPRBanner from './components/GDPRBanner'
 import AccessCodeModal from './components/AccessCodeModal'
@@ -10,6 +10,7 @@ import NotificationBell from './components/NotificationBell'
 import PendingApprovalsPage from './components/PendingApprovalsPage'
 import AddressSuggest from './components/AddressSuggest'
 import CompanySuggest from './components/CompanySuggest'
+import LocationMultiSuggest from './components/LocationMultiSuggest'
 import BrokerageContractModal from './components/BrokerageContractModal'
 import EntityHistory from './components/EntityHistory'
 import MatchesList from './components/MatchesList'
@@ -1047,28 +1048,40 @@ function Dashboard({ stats, currentUser }) {
       <div className="glass-card mb-6 p-6">
         <div>
           <h3 className="text-2xl font-bold text-gray-900">Statistiky</h3>
-          <p className="text-sm text-gray-600 mt-1">Přehled klíčových metrik systému</p>
+          <p className="text-sm text-gray-600 mt-1">
+            {currentUser?.role === 'admin' && 'Přehled klíčových metrik systému'}
+            {currentUser?.role === 'agent' && 'Přehled vašich nabídek a poptávek'}
+            {currentUser?.role === 'client' && 'Přehled vašich poptávek'}
+          </p>
         </div>
       </div>
       
       <div className="dashboard-grid">
-        <div className="glass-card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-600 text-sm font-medium">Aktivní nabídky</p>
-              <p className="text-5xl font-bold text-gradient mt-2">{stats.properties?.total || 0}</p>
-              <p className="text-sm text-gray-500 mt-1">
-                {stats.properties?.sale || 0} k prodeji • {stats.properties?.rent || 0} k pronájmu
-              </p>
+        {/* Aktivní nabídky - Agent vidí jen své, Admin vidí vše */}
+        {(currentUser?.role === 'admin' || currentUser?.role === 'agent') && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">
+                  {currentUser?.role === 'admin' ? 'Aktivní nabídky' : 'Moje nabídky'}
+                </p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.properties?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {stats.properties?.sale || 0} k prodeji • {stats.properties?.rent || 0} k pronájmu
+                </p>
+              </div>
+              <Building className="w-16 h-16 text-purple-400" />
             </div>
-            <Building className="w-16 h-16 text-purple-400" />
           </div>
-        </div>
+        )}
         
+        {/* Aktivní poptávky - Všichni vidí podle role */}
         <div className="glass-card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Aktivní poptávky</p>
+              <p className="text-gray-600 text-sm font-medium">
+                {currentUser?.role === 'admin' ? 'Aktivní poptávky' : 'Moje poptávky'}
+              </p>
               <p className="text-5xl font-bold text-gradient mt-2">{stats.demands?.total || 0}</p>
               <p className="text-sm text-gray-500 mt-1">
                 {stats.demands?.sale || 0} na prodej • {stats.demands?.rent || 0} na pronájem
@@ -1078,32 +1091,39 @@ function Dashboard({ stats, currentUser }) {
           </div>
         </div>
         
-        <div className="glass-card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-600 text-sm font-medium">Aktivní uživatelé</p>
-              <p className="text-5xl font-bold text-gradient mt-2">{stats.users?.total || 0}</p>
-              <p className="text-sm text-gray-500 mt-1">
-                {stats.users?.agents || 0} {(stats.users?.agents || 0) === 1 ? 'agent' : (stats.users?.agents || 0) < 5 ? 'agenti' : 'agentů'} • {stats.users?.clients || 0} {(stats.users?.clients || 0) === 1 ? 'klient' : (stats.users?.clients || 0) < 5 ? 'klienti' : 'klientů'}
-              </p>
+        {/* Aktivní uživatelé - pouze Admin */}
+        {currentUser?.role === 'admin' && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">Aktivní uživatelé</p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.users?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {stats.users?.agents || 0} {(stats.users?.agents || 0) === 1 ? 'agent' : (stats.users?.agents || 0) < 5 ? 'agenti' : 'agentů'} • {stats.users?.clients || 0} {(stats.users?.clients || 0) === 1 ? 'klient' : (stats.users?.clients || 0) < 5 ? 'klienti' : 'klientů'}
+                </p>
+              </div>
+              <UsersIcon className="w-16 h-16 text-green-400" />
             </div>
-            <UsersIcon className="w-16 h-16 text-green-400" />
           </div>
-        </div>
+        )}
         
-        <div className="glass-card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-600 text-sm font-medium">Páry nabídka-poptávka</p>
-              <p className="text-5xl font-bold text-gradient mt-2">{stats.matches?.total || 0}</p>
-              <p className="text-sm text-gray-500 mt-1">
-                {stats.matches?.new || 0} {(stats.matches?.new || 0) === 1 ? 'nový' : (stats.matches?.new || 0) < 5 ? 'nové' : 'nových'}
-              </p>
+        {/* Páry nabídka-poptávka - pouze Admin */}
+        {currentUser?.role === 'admin' && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">Páry nabídka-poptávka</p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.matches?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {stats.matches?.new || 0} {(stats.matches?.new || 0) === 1 ? 'nový' : (stats.matches?.new || 0) < 5 ? 'nové' : 'nových'}
+                </p>
+              </div>
+              <Heart className="w-16 h-16 text-red-400" />
             </div>
-            <Heart className="w-16 h-16 text-red-400" />
           </div>
-        </div>
+        )}
         
+        {/* Čekající registrace - pouze Admin */}
         {currentUser?.role === 'admin' && (
           <div className="glass-card border-2 border-yellow-400">
             <div className="flex items-center justify-between">
@@ -1125,6 +1145,8 @@ function Dashboard({ stats, currentUser }) {
 
 function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAdd, onEdit, onDelete, onToggleStatus, onViewDetail, onGenerateCode }) {
   const [viewMode, setViewMode] = useState('grid') // grid, list, map, hidden
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage] = useState(12)
   
   // Obnovit mapu po zavření detailu
   useEffect(() => {
@@ -1193,6 +1215,17 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
     
     return true
   }) : []
+
+  // Stránkování
+  const totalPages = Math.ceil(filteredProperties.length / itemsPerPage)
+  const indexOfLastItem = currentPage * itemsPerPage
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage
+  const currentProperties = viewMode === 'map' ? filteredProperties : filteredProperties.slice(indexOfFirstItem, indexOfLastItem)
+  
+  // Reset na první stránku při změně filtrů
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [filters])
 
   const handleAccessCodeSubmit = async (code) => {
     try {
@@ -1485,7 +1518,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
         </div>
       ) : viewMode === 'grid' ? (
         <div className="properties-grid">
-          {filteredProperties.map(property => (
+          {currentProperties.map(property => (
             <PropertyCard
               key={property.id}
               property={property}
@@ -1501,7 +1534,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
         </div>
       ) : (
         <div className="space-y-4">
-          {filteredProperties.map(property => {
+          {currentProperties.map(property => {
             const isMyProperty = property.agent_id === currentUser.id
             const hasLOI = property.has_loi === 1
             const hasContract = property.brokerage_contract_signed === 1
@@ -1633,6 +1666,63 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
         </div>
       )}
       
+      {/* Stránkování */}
+      {viewMode !== 'map' && viewMode !== 'hidden' && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-8">
+          <button
+            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+            disabled={currentPage === 1}
+            className="glass-button-secondary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Předchozí
+          </button>
+          
+          <div className="flex items-center gap-2">
+            {[...Array(totalPages)].map((_, index) => {
+              const pageNum = index + 1
+              // Zobrazit pouze stránky okolo aktuální
+              if (
+                pageNum === 1 ||
+                pageNum === totalPages ||
+                (pageNum >= currentPage - 2 && pageNum <= currentPage + 2)
+              ) {
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={`px-4 py-2 rounded-full transition-all text-sm font-medium ${
+                      currentPage === pageNum
+                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                        : 'glass-button-secondary'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                )
+              } else if (
+                pageNum === currentPage - 3 ||
+                pageNum === currentPage + 3
+              ) {
+                return <span key={pageNum} className="px-2">...</span>
+              }
+              return null
+            })}
+          </div>
+          
+          <button
+            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+            disabled={currentPage === totalPages}
+            className="glass-button-secondary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Další
+          </button>
+          
+          <span className="ml-4 text-sm text-gray-600">
+            Stránka {currentPage} z {totalPages} ({filteredProperties.length} nabídek)
+          </span>
+        </div>
+      )}
+      
       {/* Modal pro přístupový kód */}
       {showAccessCodeModal && (
         <AccessCodeModal
@@ -1647,6 +1737,8 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
 }
 
 function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, onGenerateCode }) {
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage] = useState(12)
   const [filters, setFilters] = useState({
     transaction_type: '',
     property_type: '',
@@ -1706,6 +1798,17 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
     
     return true
   })
+
+  // Stránkování
+  const totalPages = Math.ceil(filteredDemands.length / itemsPerPage)
+  const indexOfLastItem = currentPage * itemsPerPage
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage
+  const currentDemands = filteredDemands.slice(indexOfFirstItem, indexOfLastItem)
+  
+  // Reset na první stránku při změně filtrů
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [filters])
 
   const handleAccessCodeSubmit = async (code) => {
     try {
@@ -1923,7 +2026,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
       </div>
       
       <div className="space-y-4">
-        {filteredDemands.map(demand => {
+        {currentDemands.map(demand => {
           const isOwn = isOwnDemand(demand)
           const canViewFull = currentUser.role === 'admin' || isOwn
           const hasLOI = demand.has_loi === 1
@@ -1955,6 +2058,11 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
                   <div className="flex items-center space-x-3 mb-2">
                     <h3 className="text-xl font-bold text-gray-900">
                       {LABELS_CS[demand.transaction_type]} • {LABELS_CS[demand.property_type]}
+                      {demand.property_requirements && demand.property_requirements.length > 1 && (
+                        <span className="text-sm text-purple-600 ml-2">
+                          (+{demand.property_requirements.length - 1} dalších typů)
+                        </span>
+                      )}
                     </h3>
                     {canViewFull ? (
                       <span className="badge bg-purple-100 text-purple-700">
@@ -1969,13 +2077,42 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
                   </div>
                   
                   <div className="flex items-center space-x-6 text-gray-600">
-                    <span>Cena: {formatPrice(demand.price_min)} - {formatPrice(demand.price_max)} Kč</span>
-                    <span>Plocha: {demand.area_min} - {demand.area_max} m²</span>
-                    <span>Pokoje: {demand.rooms_min} - {demand.rooms_max}</span>
+                    {/* Nová struktura s common_filters */}
+                    {demand.common_filters?.price && (
+                      <span>
+                        Cena: {demand.common_filters.price.min ? formatPrice(demand.common_filters.price.min) : '0'} - {demand.common_filters.price.max ? formatPrice(demand.common_filters.price.max) : '∞'} Kč
+                      </span>
+                    )}
+                    {/* Stará struktura - fallback */}
+                    {!demand.common_filters?.price && demand.price_min && (
+                      <span>Cena: {formatPrice(demand.price_min)} - {formatPrice(demand.price_max)} Kč</span>
+                    )}
+                    
+                    {/* Zobrazit lokality z nové struktury */}
                     {canViewFull ? (
-                      <span>Lokace: {demand.cities?.join(', ')}</span>
+                      demand.locations && Array.isArray(demand.locations) && demand.locations.length > 0 ? (
+                        <span>Lokality: {demand.locations.map(l => l.name).join(', ')}</span>
+                      ) : demand.cities && Array.isArray(demand.cities) && demand.cities.length > 0 ? (
+                        <span>Lokace: {demand.cities.join(', ')}</span>
+                      ) : null
                     ) : (
                       <span>Lokace: Skryto</span>
+                    )}
+                    
+                    {/* Zobrazit typy nemovitostí */}
+                    {demand.property_requirements && demand.property_requirements.length > 0 && (
+                      <span className="text-sm">
+                        {demand.property_requirements.map((req, i) => {
+                          const subtypes = req.property_subtypes || (req.property_subtype ? [req.property_subtype] : []);
+                          return (
+                            <span key={i}>
+                              {i > 0 && ' | '}
+                              {LABELS_CS[req.property_type]}
+                              {subtypes.length > 0 && ` (${subtypes.join(', ')})`}
+                            </span>
+                          );
+                        })}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -2013,6 +2150,62 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
           )
         })}
       </div>
+      
+      {/* Stránkování */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-8">
+          <button
+            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+            disabled={currentPage === 1}
+            className="glass-button-secondary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Předchozí
+          </button>
+          
+          <div className="flex items-center gap-2">
+            {[...Array(totalPages)].map((_, index) => {
+              const pageNum = index + 1
+              if (
+                pageNum === 1 ||
+                pageNum === totalPages ||
+                (pageNum >= currentPage - 2 && pageNum <= currentPage + 2)
+              ) {
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={`px-4 py-2 rounded-full transition-all text-sm font-medium ${
+                      currentPage === pageNum
+                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                        : 'glass-button-secondary'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                )
+              } else if (
+                pageNum === currentPage - 3 ||
+                pageNum === currentPage + 3
+              ) {
+                return <span key={pageNum} className="px-2">...</span>
+              }
+              return null
+            })}
+          </div>
+          
+          <button
+            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+            disabled={currentPage === totalPages}
+            className="glass-button-secondary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Další
+          </button>
+          
+          <span className="ml-4 text-sm text-gray-600">
+            Stránka {currentPage} z {totalPages} ({filteredDemands.length} poptávek)
+          </span>
+        </div>
+      )}
       
       {/* Modal pro přístupový kód */}
       {showAccessCodeModal && (
@@ -2221,7 +2414,8 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
     video_url: property?.video_url || '',
     video_tour_url: property?.video_tour_url || '',
     matterport_url: property?.matterport_url || '',
-    website_url: property?.website_url || ''
+    website_url: property?.website_url || '',
+    validity_days: property?.validity_days || 14
   })
   
   const [uploading, setUploading] = useState(false)
@@ -2472,6 +2666,21 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
                   onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                   className="glass-input"
                 />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Platnost nabídky</label>
+                <select
+                  value={formData.validity_days}
+                  onChange={(e) => setFormData({ ...formData, validity_days: parseInt(e.target.value) })}
+                  className="glass-input"
+                >
+                  <option value="14">14 dní</option>
+                  <option value="30">30 dní</option>
+                  <option value="60">60 dní</option>
+                  <option value="0">Stále (bez omezení)</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Po vypršení bude potřeba potvrdit aktuálnost.</p>
               </div>
             </div>
           </div>
@@ -3408,48 +3617,108 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
 }
 
 function DemandModal({ demand, users, onSave, onClose, currentUser }) {
+  // Nová flexibilní struktura
+  const [propertyRequirements, setPropertyRequirements] = useState(
+    Array.isArray(demand?.property_requirements) && demand.property_requirements.length > 0
+      ? demand.property_requirements.map(req => ({
+          ...req,
+          // Migrace ze starého formátu (property_subtype) na nový (property_subtypes)
+          property_subtypes: req.property_subtypes || (req.property_subtype ? [req.property_subtype] : [])
+        }))
+      : [
+          {
+            transaction_type: 'sale',
+            property_type: 'flat',
+            property_subtypes: [],
+            filters: {}
+          }
+        ]
+  )
+  
+  const [commonFilters, setCommonFilters] = useState({
+    price: {
+      min: demand?.common_filters?.price?.min || '',
+      max: demand?.common_filters?.price?.max || ''
+    }
+  })
+  
+  const [locations, setLocations] = useState(
+    Array.isArray(demand?.locations) ? demand.locations : []
+  )
+  
   const [formData, setFormData] = useState({
     client_id: demand?.client_id || currentUser.id,
-    transaction_type: demand?.transaction_type || 'sale',
-    property_type: demand?.property_type || 'flat',
-    property_subtype: demand?.property_subtype || '',
-    property_types: demand?.property_types || ['flat'], // Pole typů
-    transaction_types: demand?.transaction_types || ['sale'], // Pole transakcí
-    price_min: demand?.price_min || '',
-    price_max: demand?.price_max || '',
-    cities: demand?.cities ? demand.cities.join(', ') : '',
-    districts: demand?.districts ? demand.districts.join(', ') : '',
-    area_min: demand?.area_min || '',
-    area_max: demand?.area_max || '',
-    rooms_min: demand?.rooms_min || '',
-    rooms_max: demand?.rooms_max || '',
-    floor_min: demand?.floor_min || '',
-    floor_max: demand?.floor_max || '',
-    required_features: demand?.required_features || [],
     status: demand?.status || 'active',
-    email_notifications: demand?.email_notifications !== undefined ? demand.email_notifications : 1
+    email_notifications: demand?.email_notifications !== undefined ? demand.email_notifications : 1,
+    validity_days: demand?.validity_days || 30
   })
 
-  const togglePropertyType = (type) => {
-    const types = formData.property_types.includes(type)
-      ? formData.property_types.filter(t => t !== type)
-      : [...formData.property_types, type];
-    setFormData({ ...formData, property_types: types, property_type: types[0] || 'flat' })
+  // Přidat novou konfiguraci typu nemovitosti
+  const addPropertyRequirement = () => {
+    // Použít stejný typ transakce jako první požadavek
+    const transactionType = propertyRequirements[0]?.transaction_type || 'sale';
+    
+    setPropertyRequirements([
+      ...propertyRequirements,
+      {
+        transaction_type: transactionType,
+        property_type: 'flat',
+        property_subtype: '2+kk',
+        filters: {}
+      }
+    ])
   }
 
-  const toggleTransactionType = (type) => {
-    const types = formData.transaction_types.includes(type)
-      ? formData.transaction_types.filter(t => t !== type)
-      : [...formData.transaction_types, type];
-    setFormData({ ...formData, transaction_types: types, transaction_type: types[0] || 'sale' })
+  // Odstranit konfiguraci
+  const removePropertyRequirement = (index) => {
+    if (propertyRequirements.length > 1) {
+      setPropertyRequirements(propertyRequirements.filter((_, i) => i !== index))
+    }
   }
+
+  // Aktualizovat konfiguraci
+  const updatePropertyRequirement = (index, field, value) => {
+    const updated = [...propertyRequirements]
+    
+    // Pokud se mění typ transakce, změnit u všech požadavků
+    if (field === 'transaction_type') {
+      updated.forEach(req => {
+        req.transaction_type = value
+      })
+    } else if (field.includes('.')) {
+      const parts = field.split('.')
+      if (parts.length === 3) {
+        // filters.rooms.min
+        const [parent, child, grandchild] = parts
+        updated[index][parent] = {
+          ...updated[index][parent],
+          [child]: {
+            ...(updated[index][parent]?.[child] || {}),
+            [grandchild]: value
+          }
+        }
+      } else {
+        // parent.child
+        const [parent, child] = parts
+        updated[index][parent] = { ...updated[index][parent], [child]: value }
+      }
+    } else {
+      updated[index][field] = value
+    }
+    setPropertyRequirements(updated)
+  }
+
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    
     const data = {
       ...formData,
-      cities: formData.cities.split(',').map(c => c.trim()).filter(c => c),
-      districts: formData.districts.split(',').map(d => d.trim()).filter(d => d)
+      property_requirements: propertyRequirements,
+      common_filters: {
+        price: commonFilters.price
+      },
+      locations: locations
     }
     onSave(data)
   }
@@ -3460,6 +3729,30 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
         <h2 className="text-2xl font-bold text-gradient mb-6">
           {demand ? 'Upravit poptávku' : 'Vytvořit poptávku'}
         </h2>
+        
+        {/* Nápověda */}
+        <div className="glass-card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 mb-6">
+          <div className="flex items-start gap-3">
+            <div className="icon-circle icon-circle-sm bg-blue-100 text-blue-600">
+              <Building2 className="w-4 h-4" />
+            </div>
+            <div className="flex-1">
+              <h4 className="font-semibold text-blue-900 mb-2">Jak vytvořit poptávku?</h4>
+              <div className="text-sm text-blue-800 space-y-2">
+                <p><strong>1. Společné informace:</strong> Zadejte cenové rozpětí, platnost a lokality (města, čtvrti, okresy).</p>
+                <p><strong>2. Specifické požadavky:</strong> Pro každý typ nemovitosti můžete zadat vlastní kritéria:</p>
+                <ul className="list-disc list-inside ml-4 space-y-1">
+                  <li><strong>Byt:</strong> počet pokojů, patro, plocha</li>
+                  <li><strong>Dům:</strong> počet pokojů, plocha, plocha pozemku</li>
+                  <li><strong>Pozemek:</strong> plocha pozemku</li>
+                  <li><strong>Komerční:</strong> plocha, patro (pro kanceláře)</li>
+                </ul>
+                <p><strong>3. Více typů najednou:</strong> Klikněte na "Přidat další typ nemovitosti" pro vytvoření komplexní poptávky (např. byt NEBO dům).</p>
+                <p className="text-xs text-blue-600 mt-2">💡 Tip: GPS souřadnice lokalit se ukládají automaticky pro přesné vyhledávání.</p>
+              </div>
+            </div>
+          </div>
+        </div>
         
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-2 gap-4">
@@ -3492,94 +3785,15 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
               </div>
             )}
             
-            <div className="col-span-2">
-              <div className="glass-card p-4 bg-blue-50 border border-blue-200 mb-4">
-                <div className="flex items-start gap-3">
-                  <div className="icon-circle icon-circle-sm bg-blue-100 text-blue-600">
-                    <Building2 className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-blue-900 mb-1">Multi-poptávka</h4>
-                    <p className="text-sm text-blue-700">
-                      Můžete vybrat více typů transakcí a nemovitostí. Systém automaticky vytvoří samostatnou poptávku pro každou kombinaci.
-                      <br />
-                      <strong>Příklad:</strong> Výběr "Prodej + Pronájem" a "Byt + Dům" vytvoří 4 poptávky.
-                    </p>
-                  </div>
-                </div>
-              </div>
-              
-              <label className="block text-sm font-medium text-gray-700 mb-2">Typ transakce (můžete vybrat více)</label>
-              <div className="flex gap-4">
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.transaction_types.includes('sale')}
-                    onChange={() => toggleTransactionType('sale')}
-                    className="w-4 h-4"
-                  />
-                  <span>Prodej</span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.transaction_types.includes('rent')}
-                    onChange={() => toggleTransactionType('rent')}
-                    className="w-4 h-4"
-                  />
-                  <span>Pronájem</span>
-                </label>
-              </div>
-            </div>
-            
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Typ nemovitosti (můžete vybrat více)</label>
-              <div className="flex gap-4 flex-wrap">
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.property_types.includes('flat')}
-                    onChange={() => togglePropertyType('flat')}
-                    className="w-4 h-4"
-                  />
-                  <span>Byt</span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.property_types.includes('house')}
-                    onChange={() => togglePropertyType('house')}
-                    className="w-4 h-4"
-                  />
-                  <span>Dům</span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.property_types.includes('commercial')}
-                    onChange={() => togglePropertyType('commercial')}
-                    className="w-4 h-4"
-                  />
-                  <span>Komerční</span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.property_types.includes('land')}
-                    onChange={() => togglePropertyType('land')}
-                    className="w-4 h-4"
-                  />
-                  <span>Pozemek</span>
-                </label>
-              </div>
-            </div>
-            
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Cena od (Kč)</label>
               <input
                 type="number"
-                value={formData.price_min}
-                onChange={(e) => setFormData({ ...formData, price_min: e.target.value })}
+                value={commonFilters.price.min}
+                onChange={(e) => setCommonFilters({ 
+                  ...commonFilters, 
+                  price: { ...commonFilters.price, min: e.target.value }
+                })}
                 className="glass-input"
               />
             </div>
@@ -3588,113 +3802,376 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
               <label className="block text-sm font-medium text-gray-700 mb-2">Cena do (Kč)</label>
               <input
                 type="number"
-                value={formData.price_max}
-                onChange={(e) => setFormData({ ...formData, price_max: e.target.value })}
+                value={commonFilters.price.max}
+                onChange={(e) => setCommonFilters({ 
+                  ...commonFilters, 
+                  price: { ...commonFilters.price, max: e.target.value }
+                })}
                 className="glass-input"
               />
             </div>
             
             <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Města (oddělené čárkou)</label>
-              <input
-                type="text"
-                value={formData.cities}
-                onChange={(e) => setFormData({ ...formData, cities: e.target.value })}
-                className="glass-input"
-                placeholder="Praha, Brno, Ostrava"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Plocha od (m²)</label>
-              <input
-                type="number"
-                value={formData.area_min}
-                onChange={(e) => setFormData({ ...formData, area_min: e.target.value })}
-                className="glass-input"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Plocha do (m²)</label>
-              <input
-                type="number"
-                value={formData.area_max}
-                onChange={(e) => setFormData({ ...formData, area_max: e.target.value })}
-                className="glass-input"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Pokoje od</label>
-              <input
-                type="number"
-                value={formData.rooms_min}
-                onChange={(e) => setFormData({ ...formData, rooms_min: e.target.value })}
-                className="glass-input"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Pokoje do</label>
-              <input
-                type="number"
-                value={formData.rooms_max}
-                onChange={(e) => setFormData({ ...formData, rooms_max: e.target.value })}
-                className="glass-input"
-              />
-            </div>
-            
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Okresy (oddělené čárkou)</label>
-              <input
-                type="text"
-                value={formData.districts}
-                onChange={(e) => setFormData({ ...formData, districts: e.target.value })}
-                className="glass-input"
-                placeholder="Praha-východ, Brno-město"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Patro od</label>
-              <input
-                type="number"
-                value={formData.floor_min}
-                onChange={(e) => setFormData({ ...formData, floor_min: e.target.value })}
-                className="glass-input"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Patro do</label>
-              <input
-                type="number"
-                value={formData.floor_max}
-                onChange={(e) => setFormData({ ...formData, floor_max: e.target.value })}
-                className="glass-input"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Dispozice</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Platnost poptávky</label>
               <select
-                value={formData.property_subtype}
-                onChange={(e) => setFormData({ ...formData, property_subtype: e.target.value })}
+                value={formData.validity_days}
+                onChange={(e) => setFormData({ ...formData, validity_days: parseInt(e.target.value) })}
                 className="glass-input"
               >
-                <option value="">Jakákoliv</option>
-                <option value="1+kk">1+kk</option>
-                <option value="1+1">1+1</option>
-                <option value="2+kk">2+kk</option>
-                <option value="2+1">2+1</option>
-                <option value="3+kk">3+kk</option>
-                <option value="3+1">3+1</option>
-                <option value="4+kk">4+kk</option>
-                <option value="4+1">4+1</option>
-                <option value="5+kk">5+kk</option>
-                <option value="5+1">5+1</option>
+                <option value="14">14 dní</option>
+                <option value="30">30 dní</option>
+                <option value="60">60 dní</option>
+                <option value="0">Stále (bez omezení)</option>
               </select>
+              <p className="text-xs text-gray-500 mt-1">Po vypršení bude potřeba potvrdit aktuálnost.</p>
+            </div>
+            
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                <span className="text-gradient text-lg">Lokality</span>
+                <span className="block text-xs text-gray-500 mt-1 font-normal">
+                  Inteligentní našeptávač - můžete přidat města, vesnice, čtvrti, okresy nebo kraje
+                </span>
+              </label>
+              <LocationMultiSuggest
+                locations={locations}
+                onChange={setLocations}
+                placeholder="Zadejte lokalitu (např. Praha, Brno-střed, okres Plzeň-jih)"
+              />
+            </div>
+            
+            {/* Nová sekce: Specifické požadavky podle typu nemovitosti */}
+            <div className="col-span-2">
+              <div className="border-t border-gray-200 my-6"></div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Specifické požadavky na nemovitosti</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Pro každý vybraný typ nemovitosti můžete zadat specifické požadavky (pokoje, patro, plocha pozemku atd.)
+              </p>
+              
+              {propertyRequirements.map((req, index) => (
+                <div key={index} className="glass-card p-4 mb-4 bg-gray-50">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-semibold text-gray-900">
+                      Požadavek {index + 1}: {req.transaction_type === 'sale' ? 'Prodej' : 'Pronájem'} - {
+                        req.property_type === 'flat' ? 'Byt' :
+                        req.property_type === 'house' ? 'Dům' :
+                        req.property_type === 'commercial' ? 'Komerční' :
+                        req.property_type === 'land' ? 'Pozemek' : 'Projekt'
+                      }
+                    </h4>
+                    {propertyRequirements.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removePropertyRequirement(index)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Typ transakce
+                        {propertyRequirements.length > 1 && (
+                          <span className="text-xs text-purple-600 ml-2">(společné pro všechny typy)</span>
+                        )}
+                      </label>
+                      <select
+                        value={req.transaction_type}
+                        onChange={(e) => updatePropertyRequirement(index, 'transaction_type', e.target.value)}
+                        className="glass-input"
+                      >
+                        <option value="sale">Prodej</option>
+                        <option value="rent">Pronájem</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Typ nemovitosti</label>
+                      <select
+                        value={req.property_type}
+                        onChange={(e) => updatePropertyRequirement(index, 'property_type', e.target.value)}
+                        className="glass-input"
+                      >
+                        <option value="flat">Byt</option>
+                        <option value="house">Dům</option>
+                        <option value="commercial">Komerční</option>
+                        <option value="land">Pozemek</option>
+                        <option value="project">Projekt</option>
+                      </select>
+                    </div>
+                    
+                    {/* Podtypy nemovitosti - multi-select */}
+                    <div className="col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        {req.property_type === 'flat' && 'Dispozice (můžete vybrat více)'}
+                        {req.property_type === 'house' && 'Typ domu (můžete vybrat více)'}
+                        {req.property_type === 'commercial' && 'Typ komerční nemovitosti (můžete vybrat více)'}
+                        {req.property_type === 'land' && 'Typ pozemku (můžete vybrat více)'}
+                        {req.property_type === 'project' && 'Typ projektu (můžete vybrat více)'}
+                      </label>
+                      <div className="glass-card p-3 max-h-48 overflow-y-auto">
+                        <label className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                          <input
+                            type="checkbox"
+                            checked={!req.property_subtypes || req.property_subtypes.length === 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                updatePropertyRequirement(index, 'property_subtypes', [])
+                              }
+                            }}
+                            className="w-4 h-4 text-primary-600"
+                          />
+                          <span className="text-sm font-medium">Jakýkoliv</span>
+                        </label>
+                        {req.property_type === 'flat' && (
+                          <>
+                            {['1+kk', '1+1', '2+kk', '2+1', '3+kk', '3+1', '4+kk', '4+1', '5+kk', '5+1', '6+kk', '6+1', 'atypical', 'other'].map(subtype => (
+                              <label key={subtype} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={(req.property_subtypes || []).includes(subtype)}
+                                  onChange={(e) => {
+                                    const current = req.property_subtypes || []
+                                    const updated = e.target.checked 
+                                      ? [...current, subtype]
+                                      : current.filter(s => s !== subtype)
+                                    updatePropertyRequirement(index, 'property_subtypes', updated)
+                                  }}
+                                  className="w-4 h-4 text-primary-600"
+                                />
+                                <span className="text-sm">{subtype === 'atypical' ? 'Atypický' : subtype === 'other' ? 'Jiný' : subtype}</span>
+                              </label>
+                            ))}
+                          </>
+                        )}
+                        {req.property_type === 'house' && (
+                          <>
+                            {[{v:'family_house',l:'Rodinný dům'},{v:'villa',l:'Vila'},{v:'cottage',l:'Chalupa'},{v:'cabin',l:'Chata'},{v:'farmhouse',l:'Zemědělská usedlost'},{v:'mobile_home',l:'Mobilní dům'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+                              <label key={v} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={(req.property_subtypes || []).includes(v)}
+                                  onChange={(e) => {
+                                    const current = req.property_subtypes || []
+                                    const updated = e.target.checked ? [...current, v] : current.filter(s => s !== v)
+                                    updatePropertyRequirement(index, 'property_subtypes', updated)
+                                  }}
+                                  className="w-4 h-4 text-primary-600"
+                                />
+                                <span className="text-sm">{l}</span>
+                              </label>
+                            ))}
+                          </>
+                        )}
+                        {req.property_type === 'commercial' && (
+                          <>
+                            {[{v:'office',l:'Kancelář'},{v:'retail',l:'Obchod'},{v:'warehouse',l:'Sklad'},{v:'production',l:'Výroba'},{v:'restaurant',l:'Restaurace'},{v:'accommodation',l:'Ubytování'},{v:'agricultural',l:'Zemědělský objekt'},{v:'garage',l:'Garáž'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+                              <label key={v} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={(req.property_subtypes || []).includes(v)}
+                                  onChange={(e) => {
+                                    const current = req.property_subtypes || []
+                                    const updated = e.target.checked ? [...current, v] : current.filter(s => s !== v)
+                                    updatePropertyRequirement(index, 'property_subtypes', updated)
+                                  }}
+                                  className="w-4 h-4 text-primary-600"
+                                />
+                                <span className="text-sm">{l}</span>
+                              </label>
+                            ))}
+                          </>
+                        )}
+                        {req.property_type === 'land' && (
+                          <>
+                            {[{v:'building_plot',l:'Stavební parcela'},{v:'agricultural',l:'Zemědělský'},{v:'forest',l:'Les'},{v:'garden',l:'Zahrada'},{v:'orchard',l:'Sad'},{v:'meadow',l:'Louka'},{v:'pond',l:'Rybník'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+                              <label key={v} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={(req.property_subtypes || []).includes(v)}
+                                  onChange={(e) => {
+                                    const current = req.property_subtypes || []
+                                    const updated = e.target.checked ? [...current, v] : current.filter(s => s !== v)
+                                    updatePropertyRequirement(index, 'property_subtypes', updated)
+                                  }}
+                                  className="w-4 h-4 text-primary-600"
+                                />
+                                <span className="text-sm">{l}</span>
+                              </label>
+                            ))}
+                          </>
+                        )}
+                        {req.property_type === 'project' && (
+                          <>
+                            {[{v:'residential',l:'Bytový projekt'},{v:'commercial',l:'Komerční projekt'},{v:'mixed',l:'Smíšený projekt'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+                              <label key={v} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={(req.property_subtypes || []).includes(v)}
+                                  onChange={(e) => {
+                                    const current = req.property_subtypes || []
+                                    const updated = e.target.checked ? [...current, v] : current.filter(s => s !== v)
+                                    updatePropertyRequirement(index, 'property_subtypes', updated)
+                                  }}
+                                  className="w-4 h-4 text-primary-600"
+                                />
+                                <span className="text-sm">{l}</span>
+                              </label>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Dynamická pole podle typu nemovitosti */}
+                    {req.property_type === 'flat' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Patro od</label>
+                          <input
+                            type="number"
+                            value={req.filters?.floor?.min || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.floor.min', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Patro do</label>
+                          <input
+                            type="number"
+                            value={req.filters?.floor?.max || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.floor.max', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha od (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.area?.min || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.area.min', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha do (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.area?.max || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.area.max', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                      </>
+                    )}
+                    
+                    {req.property_type === 'land' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha pozemku od (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.land_area?.min || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.land_area.min', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha pozemku do (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.land_area?.max || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.land_area.max', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                      </>
+                    )}
+                    
+                    {/* Domy - plocha a plocha pozemku */}
+                    {req.property_type === 'house' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha od (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.area?.min || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.area.min', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha do (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.area?.max || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.area.max', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha pozemku od (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.land_area?.min || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.land_area.min', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha pozemku do (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.land_area?.max || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.land_area.max', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                      </>
+                    )}
+                    
+                    {/* Komerční - plocha */}
+                    {req.property_type === 'commercial' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha od (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.area?.min || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.area.min', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Plocha do (m²)</label>
+                          <input
+                            type="number"
+                            value={req.filters?.area?.max || ''}
+                            onChange={(e) => updatePropertyRequirement(index, 'filters.area.max', e.target.value)}
+                            className="glass-input"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+              
+              <button
+                type="button"
+                onClick={addPropertyRequirement}
+                className="glass-button-secondary w-full flex items-center justify-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Přidat další typ nemovitosti
+              </button>
+            </div>
+            
+            <div className="col-span-2">
+              <div className="border-t border-gray-200 my-6"></div>
             </div>
             
             <div>
@@ -4796,10 +5273,20 @@ function PropertyDetail({ property, currentUser, onClose, onEdit, onToggleStatus
             </div>
           )}
 
-          {/* Shody (matching demands) - pouze admin */}
-          {currentUser.role === 'admin' && (
-            <MatchesList entityType="properties" entityId={property.id} currentUser={currentUser} />
-          )}
+          {/* Shody (matching demands) */}
+          <MatchesList 
+            entityType="properties" 
+            entityId={property.id} 
+            currentUser={currentUser}
+            onViewDetail={(demand) => {
+              // Otevřít detail poptávky
+              window.location.hash = `demand-${demand.id}`;
+            }}
+            onRequestAccess={(demand) => {
+              // Požádat o přístup k poptávce
+              alert('Funkce "Požádat o detail" bude implementována');
+            }}
+          />
 
           {/* Historie - pouze admin */}
           {currentUser.role === 'admin' && (
@@ -4878,9 +5365,44 @@ function DemandDetail({ demand, currentUser, onClose, onEdit, onAddProperty, onA
                     )}
                   </div>
                 </>
+              ) : currentUser.role === 'agent' ? (
+                <>
+                  {/* Agent vidí tlačítko pro žádost o kontakty */}
+                  <div style={{
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    color: 'white',
+                    padding: '1.5rem',
+                    borderRadius: '0.75rem',
+                    marginBottom: '1rem'
+                  }}>
+                    <div style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                      Kontaktní údaje klienta
+                    </div>
+                    <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>
+                      Pro získání kontaktů na klienta požádejte admina o schválení
+                    </div>
+                  </div>
+                  <div style={{
+                    padding: '0.75rem',
+                    background: '#fff3cd',
+                    borderRadius: '0.5rem',
+                    fontSize: '0.875rem',
+                    color: '#856404',
+                    marginBottom: '1rem'
+                  }}>
+                    Po schválení vám budou zpřístupněny kontaktní údaje klienta a přesné lokality
+                  </div>
+                  <button 
+                    onClick={() => alert('Žádost o kontakty bude odeslána adminovi')}
+                    className="glass-button w-full rounded-full flex items-center justify-center gap-2"
+                  >
+                    <Lock className="w-4 h-4" />
+                    Požádat o kontakty klienta
+                  </button>
+                </>
               ) : (
                 <>
-                  {/* Klient a agent vidí jen text a tlačítko */}
+                  {/* Klient vidí jen text a tlačítko */}
                   <div style={{
                     background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                     color: 'white',
@@ -4914,38 +5436,140 @@ function DemandDetail({ demand, currentUser, onClose, onEdit, onAddProperty, onA
             </div>
           </div>
 
-          {/* Požadavky */}
+          {/* Společné filtry */}
           <div>
-            <h3 className="text-xl font-bold text-gray-900 mb-3">Požadavky</h3>
+            <h3 className="text-xl font-bold text-gray-900 mb-3 flex items-center gap-2">
+              <div className="icon-circle icon-circle-sm bg-purple-100 text-purple-600">
+                <Building2 className="w-4 h-4" />
+              </div>
+              Společné požadavky
+            </h3>
             <div className="grid grid-cols-2 gap-4">
+              {demand.common_filters?.price && (
+                <div className="glass-card p-4">
+                  <div className="text-sm text-gray-600 mb-1">Cenové rozpětí</div>
+                  <div className="font-semibold">
+                    {demand.common_filters.price.min ? formatPrice(demand.common_filters.price.min) : '0'} - {demand.common_filters.price.max ? formatPrice(demand.common_filters.price.max) : '∞'} Kč
+                  </div>
+                </div>
+              )}
+              {demand.locations && Array.isArray(demand.locations) && demand.locations.length > 0 && (
+                <div className="glass-card p-4 col-span-2">
+                  <div className="text-sm text-gray-600 mb-2">
+                    Lokality
+                    {currentUser.role === 'agent' && !demand.locations[0].name && (
+                      <span className="text-xs text-orange-600 ml-2">(omezený přístup)</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {demand.locations.map((loc, i) => (
+                      <span key={i} className="badge bg-primary-100 text-primary-700 flex items-center gap-1">
+                        <MapPin className="w-3 h-3" />
+                        {loc.name || `${loc.district || loc.region}`}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Typ transakce</div>
-                <div className="font-semibold">{LABELS_CS[demand.transaction_type]}</div>
-              </div>
-              <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Typ nemovitosti</div>
-                <div className="font-semibold">{LABELS_CS[demand.property_type]}</div>
-              </div>
-              <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Cenové rozpětí</div>
+                <div className="text-sm text-gray-600 mb-1">Platnost</div>
                 <div className="font-semibold">
-                  {formatPrice(demand.price_min)} - {formatPrice(demand.price_max)} Kč
+                  {demand.validity_days > 0 ? `${demand.validity_days} dní` : 'Stále'}
                 </div>
               </div>
               <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Plocha</div>
-                <div className="font-semibold">{demand.area_min} - {demand.area_max} m²</div>
-              </div>
-              <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Počet pokojů</div>
-                <div className="font-semibold">{demand.rooms_min} - {demand.rooms_max}</div>
-              </div>
-              <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Města</div>
-                <div className="font-semibold">{demand.cities?.join(', ')}</div>
+                <div className="text-sm text-gray-600 mb-1">Email notifikace</div>
+                <div className="font-semibold">
+                  {demand.email_notifications ? 'Zapnuto' : 'Vypnuto'}
+                </div>
               </div>
             </div>
           </div>
+
+          {/* Specifické požadavky na typy nemovitostí */}
+          {demand.property_requirements && Array.isArray(demand.property_requirements) && demand.property_requirements.length > 0 && (
+            <div>
+              <h3 className="text-xl font-bold text-gray-900 mb-3 flex items-center gap-2">
+                <div className="icon-circle icon-circle-sm bg-indigo-100 text-indigo-600">
+                  <Home className="w-4 h-4" />
+                </div>
+                Typy nemovitostí
+                {demand.property_requirements.length > 1 && (
+                  <span className="badge bg-purple-100 text-purple-700">
+                    Multi-poptávka ({demand.property_requirements.length} typů)
+                  </span>
+                )}
+              </h3>
+              <div className="space-y-4">
+                {demand.property_requirements.map((req, index) => (
+                  <div key={index} className="glass-card p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-bold text-lg text-gray-900">
+                        {index + 1}. {LABELS_CS[req.transaction_type]} • {LABELS_CS[req.property_type]}
+                      </h4>
+                    </div>
+                    
+                    {/* Zobrazit všechny vybrané podtypy */}
+                    {(() => {
+                      const subtypes = req.property_subtypes || (req.property_subtype ? [req.property_subtype] : []);
+                      if (subtypes.length > 0) {
+                        return (
+                          <div className="mb-3">
+                            <div className="text-xs text-gray-600 mb-2">Podtypy:</div>
+                            <div className="flex flex-wrap gap-2">
+                              {subtypes.map((subtype, i) => (
+                                <span key={i} className="badge bg-purple-100 text-purple-700 text-xs">
+                                  {subtype}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    
+                    {req.filters && Object.keys(req.filters).length > 0 && (
+                      <div className="grid grid-cols-2 gap-3 mt-3">
+                        {req.filters.rooms && (
+                          <div className="bg-white/70 p-3 rounded-lg">
+                            <div className="text-xs text-gray-600 mb-1">Pokoje</div>
+                            <div className="font-semibold">
+                              {req.filters.rooms.min || '0'} - {req.filters.rooms.max || '∞'}
+                            </div>
+                          </div>
+                        )}
+                        {req.filters.floor && (
+                          <div className="bg-white/70 p-3 rounded-lg">
+                            <div className="text-xs text-gray-600 mb-1">Patro</div>
+                            <div className="font-semibold">
+                              {req.filters.floor.min || '0'} - {req.filters.floor.max || '∞'}
+                            </div>
+                          </div>
+                        )}
+                        {req.filters.area && (
+                          <div className="bg-white/70 p-3 rounded-lg">
+                            <div className="text-xs text-gray-600 mb-1">Plocha</div>
+                            <div className="font-semibold">
+                              {req.filters.area.min || '0'} - {req.filters.area.max || '∞'} m²
+                            </div>
+                          </div>
+                        )}
+                        {req.filters.land_area && (
+                          <div className="bg-white/70 p-3 rounded-lg">
+                            <div className="text-xs text-gray-600 mb-1">Plocha pozemku</div>
+                            <div className="font-semibold">
+                              {req.filters.land_area.min || '0'} - {req.filters.land_area.max || '∞'} m²
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Tlačítka pro admina a agenta */}
           {(currentUser.role === 'admin' || currentUser.role === 'agent') && (
@@ -4970,10 +5594,20 @@ function DemandDetail({ demand, currentUser, onClose, onEdit, onAddProperty, onA
             </div>
           )}
 
-          {/* Shody (matching properties) - pouze admin */}
-          {currentUser.role === 'admin' && (
-            <MatchesList entityType="demands" entityId={demand.id} currentUser={currentUser} />
-          )}
+          {/* Shody (matching properties) */}
+          <MatchesList 
+            entityType="demands" 
+            entityId={demand.id} 
+            currentUser={currentUser}
+            onViewDetail={(property) => {
+              // Otevřít detail nabídky
+              window.location.hash = `property-${property.id}`;
+            }}
+            onRequestAccess={(property) => {
+              // Požádat o přístup k nabídce
+              alert('Funkce "Požádat o detail" bude implementována');
+            }}
+          />
 
           {/* Historie - pouze admin */}
           {currentUser.role === 'admin' && (
