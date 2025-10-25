@@ -1057,14 +1057,12 @@ function Dashboard({ stats, currentUser }) {
       </div>
       
       <div className="dashboard-grid">
-        {/* Aktivní nabídky - Agent vidí jen své, Admin vidí vše */}
-        {(currentUser?.role === 'admin' || currentUser?.role === 'agent') && (
+        {/* Admin - Aktivní nabídky */}
+        {currentUser?.role === 'admin' && (
           <div className="glass-card">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">
-                  {currentUser?.role === 'admin' ? 'Aktivní nabídky' : 'Moje nabídky'}
-                </p>
+                <p className="text-gray-600 text-sm font-medium">Aktivní nabídky</p>
                 <p className="text-5xl font-bold text-gradient mt-2">{stats.properties?.total || 0}</p>
                 <p className="text-sm text-gray-500 mt-1">
                   {stats.properties?.sale || 0} k prodeji • {stats.properties?.rent || 0} k pronájmu
@@ -1075,21 +1073,69 @@ function Dashboard({ stats, currentUser }) {
           </div>
         )}
         
-        {/* Aktivní poptávky - Všichni vidí podle role */}
-        <div className="glass-card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-600 text-sm font-medium">
-                {currentUser?.role === 'admin' ? 'Aktivní poptávky' : 'Moje poptávky'}
-              </p>
-              <p className="text-5xl font-bold text-gradient mt-2">{stats.demands?.total || 0}</p>
-              <p className="text-sm text-gray-500 mt-1">
-                {stats.demands?.sale || 0} na prodej • {stats.demands?.rent || 0} na pronájem
-              </p>
+        {/* Agent - Moje nabídky */}
+        {currentUser?.role === 'agent' && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">Moje nabídky</p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.properties?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {stats.properties?.sale || 0} k prodeji • {stats.properties?.rent || 0} k pronájmu
+                </p>
+              </div>
+              <Building className="w-16 h-16 text-purple-400" />
             </div>
-            <Search className="w-16 h-16 text-blue-400" />
           </div>
-        </div>
+        )}
+        
+        {/* Admin - Aktivní poptávky */}
+        {currentUser?.role === 'admin' && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">Aktivní poptávky</p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.demands?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {stats.demands?.sale || 0} na prodej • {stats.demands?.rent || 0} na pronájem
+                </p>
+              </div>
+              <Search className="w-16 h-16 text-blue-400" />
+            </div>
+          </div>
+        )}
+        
+        {/* Agent - Dostupné poptávky */}
+        {currentUser?.role === 'agent' && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">Dostupné poptávky</p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.demands?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Poptávky k nabídnutí
+                </p>
+              </div>
+              <Search className="w-16 h-16 text-blue-400" />
+            </div>
+          </div>
+        )}
+        
+        {/* Klient - Moje poptávky */}
+        {currentUser?.role === 'client' && (
+          <div className="glass-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm font-medium">Moje poptávky</p>
+                <p className="text-5xl font-bold text-gradient mt-2">{stats.demands?.total || 0}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {stats.demands?.sale || 0} na prodej • {stats.demands?.rent || 0} na pronájem
+                </p>
+              </div>
+              <Search className="w-16 h-16 text-blue-400" />
+            </div>
+          </div>
+        )}
         
         {/* Aktivní uživatelé - pouze Admin */}
         {currentUser?.role === 'admin' && (
@@ -1107,21 +1153,7 @@ function Dashboard({ stats, currentUser }) {
           </div>
         )}
         
-        {/* Páry nabídka-poptávka - pouze Admin */}
-        {currentUser?.role === 'admin' && (
-          <div className="glass-card">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm font-medium">Páry nabídka-poptávka</p>
-                <p className="text-5xl font-bold text-gradient mt-2">{stats.matches?.total || 0}</p>
-                <p className="text-sm text-gray-500 mt-1">
-                  {stats.matches?.new || 0} {(stats.matches?.new || 0) === 1 ? 'nový' : (stats.matches?.new || 0) < 5 ? 'nové' : 'nových'}
-                </p>
-              </div>
-              <Heart className="w-16 h-16 text-red-400" />
-            </div>
-          </div>
-        )}
+        {/* Páry nabídka-poptávka - skryto (počítá se dynamicky v detailech) */}
         
         {/* Čekající registrace - pouze Admin */}
         {currentUser?.role === 'admin' && (
@@ -1157,6 +1189,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
   const [filters, setFilters] = useState({
     transaction_type: '',
     property_type: '',
+    property_subtype: '',
     city: '',
     price_min: '',
     price_max: '',
@@ -1204,6 +1237,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
   const filteredProperties = Array.isArray(properties) ? properties.filter(property => {
     if (filters.transaction_type && property.transaction_type !== filters.transaction_type) return false
     if (filters.property_type && property.property_type !== filters.property_type) return false
+    if (filters.property_subtype && property.property_subtype !== filters.property_subtype) return false
     if (filters.city && !property.city.toLowerCase().includes(filters.city.toLowerCase())) return false
     if (filters.price_min && property.price < parseInt(filters.price_min)) return false
     if (filters.price_max && property.price > parseInt(filters.price_max)) return false
@@ -1348,6 +1382,88 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
           </button>
         </div>
         
+        {/* Podtypy nemovitostí - dynamicky podle vybraného typu */}
+        {filters.property_type && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-600">Podtyp:</span>
+            <button
+              onClick={() => setFilters({ ...filters, property_subtype: '' })}
+              className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                filters.property_subtype === '' 
+                  ? 'bg-purple-100 text-purple-700' 
+                  : 'hover:bg-white/30 text-gray-600'
+              }`}
+            >
+              Všechny
+            </button>
+            {filters.property_type === 'flat' && ['1+kk', '1+1', '2+kk', '2+1', '3+kk', '3+1', '4+kk', '4+1', '5+kk', '5+1', 'atypical'].map(subtype => (
+              <button
+                key={subtype}
+                onClick={() => setFilters({ ...filters, property_subtype: subtype })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === subtype 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {subtype === 'atypical' ? 'Atypický' : subtype}
+              </button>
+            ))}
+            {filters.property_type === 'house' && [{v:'family_house',l:'Rodinný dům'},{v:'villa',l:'Vila'},{v:'cottage',l:'Chalupa'},{v:'cabin',l:'Chata'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            {filters.property_type === 'commercial' && [{v:'apartment_building',l:'Činžovní dům'},{v:'office',l:'Kancelář'},{v:'retail',l:'Obchod'},{v:'warehouse',l:'Sklad'},{v:'production',l:'Výroba'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            {filters.property_type === 'land' && [{v:'building_plot',l:'Stavební'},{v:'agricultural',l:'Zemědělský'},{v:'forest',l:'Les'},{v:'garden',l:'Zahrada'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            {filters.property_type === 'project' && [{v:'residential',l:'Bytový projekt'},{v:'commercial',l:'Komerční projekt'},{v:'mixed',l:'Smíšený projekt'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        )}
+        
         {/* Další filtry a akce */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 flex-1">
@@ -1397,7 +1513,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             />
             <button
               onClick={() => {
-                setFilters({ transaction_type: '', property_type: '', city: '', price_min: '', price_max: '', location_search: '', location_radius: '0' })
+                setFilters({ transaction_type: '', property_type: '', property_subtype: '', city: '', price_min: '', price_max: '', location_search: '', location_radius: '0' })
                 setSelectedLocation(null)
                 setLocationSuggestions([])
               }}
@@ -1742,6 +1858,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
   const [filters, setFilters] = useState({
     transaction_type: '',
     property_type: '',
+    property_subtype: '',
     price_min: '',
     price_max: '',
     location_search: '',
@@ -1788,6 +1905,22 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
   const filteredDemands = demands.filter(demand => {
     if (filters.transaction_type && demand.transaction_type !== filters.transaction_type) return false
     if (filters.property_type && demand.property_type !== filters.property_type) return false
+    
+    // Filtrování podle podtypu - kontrola v property_requirements nebo property_subtype
+    if (filters.property_subtype) {
+      if (demand.property_requirements && Array.isArray(demand.property_requirements)) {
+        // Nová struktura - kontrola v property_requirements
+        const hasSubtype = demand.property_requirements.some(req => {
+          const subtypes = req.property_subtypes || (req.property_subtype ? [req.property_subtype] : []);
+          return subtypes.includes(filters.property_subtype);
+        });
+        if (!hasSubtype) return false;
+      } else if (demand.property_subtype !== filters.property_subtype) {
+        // Stará struktura
+        return false;
+      }
+    }
+    
     if (filters.price_min && demand.price_max < parseInt(filters.price_min)) return false
     if (filters.price_max && demand.price_min > parseInt(filters.price_max)) return false
     
@@ -1934,6 +2067,88 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
             Projekty
           </button>
         </div>
+        
+        {/* Podtypy nemovitostí - dynamicky podle vybraného typu */}
+        {filters.property_type && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-600">Podtyp:</span>
+            <button
+              onClick={() => setFilters({ ...filters, property_subtype: '' })}
+              className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                filters.property_subtype === '' 
+                  ? 'bg-purple-100 text-purple-700' 
+                  : 'hover:bg-white/30 text-gray-600'
+              }`}
+            >
+              Všechny
+            </button>
+            {filters.property_type === 'flat' && ['1+kk', '1+1', '2+kk', '2+1', '3+kk', '3+1', '4+kk', '4+1', '5+kk', '5+1', 'atypical'].map(subtype => (
+              <button
+                key={subtype}
+                onClick={() => setFilters({ ...filters, property_subtype: subtype })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === subtype 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {subtype === 'atypical' ? 'Atypický' : subtype}
+              </button>
+            ))}
+            {filters.property_type === 'house' && [{v:'family_house',l:'Rodinný dům'},{v:'villa',l:'Vila'},{v:'cottage',l:'Chalupa'},{v:'cabin',l:'Chata'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            {filters.property_type === 'commercial' && [{v:'apartment_building',l:'Činžovní dům'},{v:'office',l:'Kancelář'},{v:'retail',l:'Obchod'},{v:'warehouse',l:'Sklad'},{v:'production',l:'Výroba'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            {filters.property_type === 'land' && [{v:'building_plot',l:'Stavební'},{v:'agricultural',l:'Zemědělský'},{v:'forest',l:'Les'},{v:'garden',l:'Zahrada'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            {filters.property_type === 'project' && [{v:'residential',l:'Bytový projekt'},{v:'commercial',l:'Komerční projekt'},{v:'mixed',l:'Smíšený projekt'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+              <button
+                key={v}
+                onClick={() => setFilters({ ...filters, property_subtype: v })}
+                className={`px-3 py-1 rounded-lg transition-all text-xs font-medium ${
+                  filters.property_subtype === v 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'hover:bg-white/30 text-gray-600'
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        )}
         
         {/* Další filtry a akce */}
         <div className="flex items-center justify-between gap-4">
@@ -2623,6 +2838,7 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
                   )}
                   {formData.property_type === 'commercial' && (
                     <>
+                      <option value="apartment_building">Činžovní dům</option>
                       <option value="office">Kancelář</option>
                       <option value="retail">Obchod</option>
                       <option value="warehouse">Sklad</option>
@@ -3968,7 +4184,7 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
                         )}
                         {req.property_type === 'commercial' && (
                           <>
-                            {[{v:'office',l:'Kancelář'},{v:'retail',l:'Obchod'},{v:'warehouse',l:'Sklad'},{v:'production',l:'Výroba'},{v:'restaurant',l:'Restaurace'},{v:'accommodation',l:'Ubytování'},{v:'agricultural',l:'Zemědělský objekt'},{v:'garage',l:'Garáž'},{v:'other',l:'Jiný'}].map(({v,l}) => (
+                            {[{v:'apartment_building',l:'Činžovní dům'},{v:'office',l:'Kancelář'},{v:'retail',l:'Obchod'},{v:'warehouse',l:'Sklad'},{v:'production',l:'Výroba'},{v:'restaurant',l:'Restaurace'},{v:'accommodation',l:'Ubytování'},{v:'agricultural',l:'Zemědělský objekt'},{v:'garage',l:'Garáž'},{v:'other',l:'Jiný'}].map(({v,l}) => (
                               <label key={v} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
                                 <input
                                   type="checkbox"

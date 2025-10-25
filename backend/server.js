@@ -1952,9 +1952,9 @@ app.get('/api/stats', (req, res) => {
         admins: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get().count,
       },
       matches: {
-        total: db.prepare('SELECT COUNT(*) as count FROM matches').get().count,
-        new: db.prepare("SELECT COUNT(*) as count FROM matches WHERE status = 'new'").get().count,
-        accepted: db.prepare("SELECT COUNT(*) as count FROM matches WHERE status = 'accepted'").get().count,
+        total: 0, // Matches se počítají dynamicky, ne z tabulky
+        new: 0,
+        accepted: 0,
       },
       registrations: {
         pending: db.prepare("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'pending'").get().count,
