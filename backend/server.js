@@ -8,6 +8,10 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import db from './database.js';
 import { sendAccessCode, sendWelcomeEmail, sendEmail, sendRegistrationApproval } from './emailService.js';
 import { 
@@ -27,9 +31,45 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
+// JWT Secret - vygeneruj novy pokud neni v .env
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || crypto.randomBytes(32).toString('hex');
+
+if (!process.env.JWT_SECRET) {
+  console.warn('VAROVÁNÍ: JWT_SECRET není nastaven v .env! Používám dočasný klíč.');
+  console.warn('Pro produkci přidej do .env: JWT_SECRET=' + JWT_SECRET);
+}
+
+// Security middleware
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: false // Vypnuto kvuli inline styles, v produkci zapnout
+}));
+
+// CORS s credentials
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
+
+app.use(cookieParser());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minut
+  max: 100, // max 100 requestu
+  message: 'Příliš mnoho požadavků, zkuste to později'
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5, // max 5 pokusů o přihlášení
+  message: 'Příliš mnoho pokusů o přihlášení, zkuste to za 15 minut'
+});
+
+app.use('/api/', limiter);
 
 // ==================== MULTER CONFIG ====================
 
@@ -121,6 +161,64 @@ const uploadDocuments = multer({
   }
 });
 
+// ==================== JWT MIDDLEWARE ====================
+
+// Middleware pro ověření JWT tokenu
+const authenticateToken = (req, res, next) => {
+  const token = req.cookies.auth_token;
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Nepřihlášen' });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token vypršel', expired: true });
+    }
+    return res.status(403).json({ error: 'Neplatný token' });
+  }
+};
+
+// Middleware pro kontrolu role
+const requireRole = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Nepřihlášen' });
+    }
+    
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Nedostatečná oprávnění' });
+    }
+    
+    next();
+  };
+};
+
+// Helper funkce pro vytvoření tokenů
+const generateTokens = (user) => {
+  const accessToken = jwt.sign(
+    { 
+      userId: user.id, 
+      email: user.email, 
+      role: user.role 
+    },
+    JWT_SECRET,
+    { expiresIn: '15m' } // 15 minut
+  );
+  
+  const refreshToken = jwt.sign(
+    { userId: user.id },
+    JWT_REFRESH_SECRET,
+    { expiresIn: '7d' } // 7 dní
+  );
+  
+  return { accessToken, refreshToken };
+};
+
 // ==================== AUDIT LOG ====================
 
 function logAction(userId, action, entityType, entityId, details, req) {
@@ -139,7 +237,7 @@ function logAction(userId, action, entityType, entityId, details, req) {
 
 // ==================== AUTH ====================
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     
@@ -153,11 +251,44 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(401).json({ error: 'Neplatné přihlašovací údaje' });
     }
     
-    const isValidPassword = bcrypt.compareSync(password, user.password);
+    // Kontrola zda je uživatel aktivní
+    if (!user.is_active) {
+      return res.status(401).json({ error: 'Účet není aktivní. Zkontrolujte email pro ověření.' });
+    }
+    
+    const isValidPassword = await bcrypt.compare(password, user.password);
     
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Neplatné přihlašovací údaje' });
     }
+    
+    // Vygenerovat JWT tokeny
+    const { accessToken, refreshToken } = generateTokens(user);
+    
+    // Uložit refresh token do databáze
+    try {
+      db.prepare(`
+        INSERT INTO refresh_tokens (user_id, token, expires_at)
+        VALUES (?, ?, datetime('now', '+7 days'))
+      `).run(user.id, refreshToken);
+    } catch (dbError) {
+      console.error('Chyba při ukládání refresh tokenu:', dbError);
+    }
+    
+    // Nastavit cookies
+    res.cookie('auth_token', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000 // 15 minut
+    });
+    
+    res.cookie('refresh_token', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 dní
+    });
     
     const { password: _, ...userWithoutPassword } = user;
     
@@ -166,6 +297,355 @@ app.post('/api/auth/login', (req, res) => {
     
     res.json(userWithoutPassword);
   } catch (error) {
+    console.error('Chyba při přihlášení:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint pro ověření aktuální session
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  try {
+    const user = db.prepare(`
+      SELECT id, name, email, role, phone, company, is_active, created_at
+      FROM users WHERE id = ?
+    `).get(req.user.userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Uživatel nenalezen' });
+    }
+    
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Refresh token endpoint
+app.post('/api/auth/refresh', async (req, res) => {
+  try {
+    const refreshToken = req.cookies.refresh_token;
+    
+    if (!refreshToken) {
+      return res.status(401).json({ error: 'Chybí refresh token' });
+    }
+    
+    // Ověřit refresh token
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    } catch (error) {
+      return res.status(403).json({ error: 'Neplatný refresh token' });
+    }
+    
+    // Zkontrolovat v databázi
+    const tokenInDb = db.prepare(`
+      SELECT * FROM refresh_tokens 
+      WHERE token = ? AND user_id = ? AND revoked = 0
+      AND expires_at > datetime('now')
+    `).get(refreshToken, decoded.userId);
+    
+    if (!tokenInDb) {
+      return res.status(403).json({ error: 'Refresh token není platný' });
+    }
+    
+    // Získat uživatele
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.userId);
+    
+    if (!user || !user.is_active) {
+      return res.status(403).json({ error: 'Uživatel není aktivní' });
+    }
+    
+    // Vytvořit nový access token
+    const { accessToken } = generateTokens(user);
+    
+    res.cookie('auth_token', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000
+    });
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Chyba při refresh:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', authenticateToken, (req, res) => {
+  try {
+    const refreshToken = req.cookies.refresh_token;
+    
+    // Revokovat refresh token
+    if (refreshToken) {
+      db.prepare(`
+        UPDATE refresh_tokens 
+        SET revoked = 1 
+        WHERE token = ?
+      `).run(refreshToken);
+    }
+    
+    // Smazat cookies
+    res.clearCookie('auth_token');
+    res.clearCookie('refresh_token');
+    
+    // Log odhlášení
+    logAction(req.user.userId, 'logout', 'user', req.user.userId, 'Odhlášení uživatele', req);
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== PASSWORD RESET ====================
+
+// Požádat o reset hesla
+app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email je povinný' });
+    }
+    
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    
+    // Bezpečnostní best practice: Neříkat, že email neexistuje
+    if (!user) {
+      return res.json({ 
+        success: true, 
+        message: 'Pokud email existuje v systému, byl odeslán link pro reset hesla' 
+      });
+    }
+    
+    // Vygenerovat reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    
+    // Uložit do DB s expirací 1 hodina
+    db.prepare(`
+      INSERT INTO password_reset_tokens (user_id, token, expires_at)
+      VALUES (?, ?, datetime('now', '+1 hour'))
+    `).run(user.id, resetTokenHash);
+    
+    // Odeslat email
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    
+    try {
+      await sendEmail(
+        user.email,
+        'Reset hesla - Estate Private',
+        `
+        Dobrý den ${user.name},
+        
+        Obdrželi jsme žádost o reset hesla pro váš účet.
+        
+        Pro reset hesla klikněte na následující link:
+        ${resetUrl}
+        
+        Link vyprší za 1 hodinu.
+        
+        Pokud jste o reset hesla nežádali, ignorujte tento email.
+        
+        S pozdravem,
+        Estate Private tým
+        `
+      );
+      
+      console.log(`Reset hesla požadován pro: ${user.email}`);
+      console.log(`Reset URL: ${resetUrl}`);
+    } catch (emailError) {
+      console.error('Chyba při odesílání emailu:', emailError);
+      // V produkci bychom neměli prozradit, že email selhal
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Pokud email existuje v systému, byl odeslán link pro reset hesla' 
+    });
+  } catch (error) {
+    console.error('Chyba při reset hesla:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reset hesla s tokenem
+app.post('/api/auth/reset-password', authLimiter, async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token a nové heslo jsou povinné' });
+    }
+    
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Heslo musí mít alespoň 6 znaků' });
+    }
+    
+    // Hash tokenu
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    
+    // Najít platný token
+    const resetToken = db.prepare(`
+      SELECT * FROM password_reset_tokens 
+      WHERE token = ? 
+      AND expires_at > datetime('now')
+      AND used = 0
+    `).get(tokenHash);
+    
+    if (!resetToken) {
+      return res.status(400).json({ error: 'Neplatný nebo vypršelý token' });
+    }
+    
+    // Nastavit nové heslo
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    db.prepare(`
+      UPDATE users 
+      SET password = ?
+      WHERE id = ?
+    `).run(hashedPassword, resetToken.user_id);
+    
+    // Označit token jako použitý
+    db.prepare(`
+      UPDATE password_reset_tokens 
+      SET used = 1 
+      WHERE id = ?
+    `).run(resetToken.id);
+    
+    // Revokovat všechny refresh tokeny uživatele (pro bezpečnost)
+    db.prepare(`
+      UPDATE refresh_tokens 
+      SET revoked = 1 
+      WHERE user_id = ?
+    `).run(resetToken.user_id);
+    
+    // Log akce
+    logAction(resetToken.user_id, 'password_reset', 'user', resetToken.user_id, 'Reset hesla', req);
+    
+    console.log(`Heslo resetováno pro user ID: ${resetToken.user_id}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Heslo bylo úspěšně změněno. Můžete se přihlásit.' 
+    });
+  } catch (error) {
+    console.error('Chyba při reset hesla:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== EMAIL VERIFICATION ====================
+
+// Odeslat verifikační email
+app.post('/api/auth/send-verification', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'Uživatel nenalezen' });
+    }
+    
+    // Zkontrolovat, zda už není ověřený
+    const existingVerification = db.prepare(`
+      SELECT * FROM email_verification_tokens 
+      WHERE user_id = ? AND verified_at IS NOT NULL
+    `).get(userId);
+    
+    if (existingVerification) {
+      return res.status(400).json({ error: 'Email je již ověřený' });
+    }
+    
+    // Vygenerovat verifikační token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    
+    // Uložit do DB
+    db.prepare(`
+      INSERT INTO email_verification_tokens (user_id, token)
+      VALUES (?, ?)
+    `).run(userId, verificationToken);
+    
+    // Odeslat email
+    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+    
+    try {
+      await sendEmail(
+        user.email,
+        'Ověření emailu - Estate Private',
+        `
+        Dobrý den ${user.name},
+        
+        Pro dokončení registrace prosím ověřte váš email kliknutím na následující link:
+        ${verifyUrl}
+        
+        S pozdravem,
+        Estate Private tým
+        `
+      );
+      
+      console.log(`Verifikační email odeslán na: ${user.email}`);
+      console.log(`Verify URL: ${verifyUrl}`);
+    } catch (emailError) {
+      console.error('Chyba při odesílání emailu:', emailError);
+      return res.status(500).json({ error: 'Chyba při odesílání emailu' });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Verifikační email byl odeslán' 
+    });
+  } catch (error) {
+    console.error('Chyba při odesílání verifikace:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ověřit email
+app.get('/api/auth/verify-email', async (req, res) => {
+  try {
+    const { token } = req.query;
+    
+    if (!token) {
+      return res.status(400).json({ error: 'Token je povinný' });
+    }
+    
+    // Najít token
+    const verificationToken = db.prepare(`
+      SELECT * FROM email_verification_tokens 
+      WHERE token = ? AND verified_at IS NULL
+    `).get(token);
+    
+    if (!verificationToken) {
+      return res.status(400).json({ error: 'Neplatný nebo již použitý token' });
+    }
+    
+    // Aktivovat uživatele
+    db.prepare(`
+      UPDATE users 
+      SET is_active = 1 
+      WHERE id = ?
+    `).run(verificationToken.user_id);
+    
+    // Označit token jako ověřený
+    db.prepare(`
+      UPDATE email_verification_tokens 
+      SET verified_at = datetime('now') 
+      WHERE id = ?
+    `).run(verificationToken.id);
+    
+    // Log akce
+    logAction(verificationToken.user_id, 'email_verified', 'user', verificationToken.user_id, 'Email ověřen', req);
+    
+    console.log(`Email ověřen pro user ID: ${verificationToken.user_id}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Email byl ověřen. Můžete se přihlásit.' 
+    });
+  } catch (error) {
+    console.error('Chyba při ověření emailu:', error);
     res.status(500).json({ error: error.message });
   }
 });

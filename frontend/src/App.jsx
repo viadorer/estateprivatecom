@@ -57,12 +57,25 @@ function App() {
   const [mapViewMode, setMapViewMode] = useState(null) // Pro uložení stavu mapy
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('currentUser')
-    if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser))
+    // Ověřit session při načtení stránky
+    const checkAuth = async () => {
+      try {
+        const response = await fetch(`${API_URL}/auth/me`, {
+          credentials: 'include'
+        })
+        
+        if (response.ok) {
+          const user = await response.json()
+          setCurrentUser(user)
+        }
+      } catch (error) {
+        console.error('Chyba při ověření session:', error)
+      } finally {
+        setLoading(false)
+      }
     }
-    // Načíst data až po inicializaci
-    setLoading(false)
+    
+    checkAuth()
     
     // Detekce kopírování textu
     const handleCopy = (e) => {
@@ -139,17 +152,17 @@ function App() {
         : `${API_URL}/demands?agentId=${currentUser.id}&userRole=${currentUser.role}`;
       
       const requests = [
-        fetch(propertiesUrl),
-        fetch(demandsUrl),
-        fetch(`${API_URL}/users`),
-        fetch(`${API_URL}/companies`),
-        fetch(`${API_URL}/stats`)
+        fetch(propertiesUrl, { credentials: 'include' }),
+        fetch(demandsUrl, { credentials: 'include' }),
+        fetch(`${API_URL}/users`, { credentials: 'include' }),
+        fetch(`${API_URL}/companies`, { credentials: 'include' }),
+        fetch(`${API_URL}/stats`, { credentials: 'include' })
       ];
       
       // Přidat registrace a emailové šablony pouze pro admina
       if (currentUser.role === 'admin') {
-        requests.push(fetch(`${API_URL}/registration-requests`));
-        requests.push(fetch(`${API_URL}/email-templates`));
+        requests.push(fetch(`${API_URL}/registration-requests`, { credentials: 'include' }));
+        requests.push(fetch(`${API_URL}/email-templates`, { credentials: 'include' }));
       }
       
       const responses = await Promise.all(requests);
@@ -266,6 +279,7 @@ function App() {
       const response = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // DŮLEŽITÉ: Posílá a přijímá cookies
         body: JSON.stringify({ email, password })
       })
       
@@ -276,7 +290,6 @@ function App() {
       
       const user = await response.json()
       setCurrentUser(user)
-      localStorage.setItem('currentUser', JSON.stringify(user))
       setShowLoginModal(false)
       // Data se načtou automaticky přes useEffect
     } catch (error) {
@@ -285,9 +298,19 @@ function App() {
     }
   }
 
-  const handleLogout = () => {
-    setCurrentUser(null)
-    localStorage.removeItem('currentUser')
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_URL}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include'
+      })
+    } catch (error) {
+      console.error('Chyba při odhlášení:', error)
+    } finally {
+      setCurrentUser(null)
+      // Přesměrovat na login
+      setShowLoginModal(true)
+    }
   }
 
   if (loading) {
