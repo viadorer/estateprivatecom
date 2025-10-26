@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import './App.css'
 import AdminImportSources from './components/AdminImportSources'
 import { Building2, Home, Search, Users as UsersIcon, LogOut, Building, Heart, Calendar, Edit, Pause, Play, Grid, List, Clock, User, FileText, Image as ImageIcon, Upload, X, Check, AlertCircle, Mail, Map, Plus, Trash2, MapPin, Lock } from 'lucide-react'
 import { LABELS_CS } from './constants'
