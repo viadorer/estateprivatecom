@@ -6,19 +6,13 @@ export default function AdminImportSources({ currentUser }) {
   const [sources, setSources] = useState([]);
   const [stats, setStats] = useState(null);
   const [selectedSource, setSelectedSource] = useState(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  // Form state
-  const [formData, setFormData] = useState({
-    name: '',
-    contact_email: '',
-    contact_phone: '',
-    rate_limit: 100
-  });
+  const [selectedAgentId, setSelectedAgentId] = useState(null);
+  const [rateLimit, setRateLimit] = useState(100);
 
   useEffect(() => {
     loadSources();
@@ -72,19 +66,17 @@ export default function AdminImportSources({ currentUser }) {
     }
   };
 
-  const createSource = async (e) => {
-    e.preventDefault();
+  const generateApiKey = async (agentId, rateLimit) => {
     try {
-      const response = await fetch(`${API_URL}/api/admin/import-sources`, {
+      const response = await fetch(`${API_URL}/api/admin/import-sources/${agentId}/generate-key`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ rate_limit: rateLimit })
       });
       const data = await response.json();
       if (data.success) {
-        setShowCreateModal(false);
-        setFormData({ name: '', contact_email: '', contact_phone: '', rate_limit: 100 });
+        setShowGenerateModal(false);
         loadSources();
         setSelectedSource(data);
         setShowApiKeyModal(true);
@@ -92,7 +84,7 @@ export default function AdminImportSources({ currentUser }) {
         setError(data.error);
       }
     } catch (err) {
-      setError('Chyba pri vytvareni zdroje');
+      setError('Chyba pri generovani API klice');
       console.error(err);
     }
   };
@@ -143,12 +135,12 @@ export default function AdminImportSources({ currentUser }) {
     }
   };
 
-  const deleteSource = async (id) => {
-    if (!confirm('Opravdu chcete smazat tento zdroj? Tato akce je nevratna.')) {
+  const revokeApiKey = async (id) => {
+    if (!confirm('Opravdu chcete odebrat API pristup tomuto agentovi?')) {
       return;
     }
     try {
-      const response = await fetch(`${API_URL}/api/admin/import-sources/${id}`, {
+      const response = await fetch(`${API_URL}/api/admin/import-sources/${id}/revoke-key`, {
         method: 'DELETE',
         credentials: 'include'
       });
@@ -160,7 +152,7 @@ export default function AdminImportSources({ currentUser }) {
         setError(data.error);
       }
     } catch (err) {
-      setError('Chyba pri mazani');
+      setError('Chyba pri odebirani pristupu');
       console.error(err);
     }
   };
@@ -178,13 +170,10 @@ export default function AdminImportSources({ currentUser }) {
     <div className="p-6">
       <div className="mb-6">
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold">Import Sources</h1>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="bg-blue-600 text-white px-6 py-2 rounded-full hover:bg-blue-700"
-          >
-            Pridat novy zdroj
-          </button>
+          <div>
+            <h1 className="text-2xl font-bold">Import API - Agenti</h1>
+            <p className="text-gray-600 text-sm mt-1">Sprava API pristupu pro agenty</p>
+          </div>
         </div>
 
         {error && (
@@ -220,8 +209,9 @@ export default function AdminImportSources({ currentUser }) {
         <table className="w-full">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nazev</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kontakt</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Spolecnost</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">API Pristup</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Importy</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Uspesnost</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Posledni import</th>
@@ -239,11 +229,30 @@ export default function AdminImportSources({ currentUser }) {
                 <tr key={source.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <div className="font-medium text-gray-900">{source.name}</div>
-                    <div className="text-sm text-gray-500">Rate limit: {source.rate_limit}/h</div>
+                    <div className="text-sm text-gray-500">{source.email}</div>
+                    <div className="text-sm text-gray-500">{source.phone || '-'}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="text-sm text-gray-900">{source.contact_email || '-'}</div>
-                    <div className="text-sm text-gray-500">{source.contact_phone || '-'}</div>
+                    <div className="text-sm text-gray-900">{source.company_name || '-'}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    {source.api_key ? (
+                      <div>
+                        <div className="text-xs text-green-600 font-medium">Aktivni</div>
+                        <div className="text-xs text-gray-500">Limit: {source.rate_limit}/h</div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setSelectedAgentId(source.id);
+                          setRateLimit(100);
+                          setShowGenerateModal(true);
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        Vygenerovat klic
+                      </button>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-900">
                     {source.total_imports || 0}
@@ -275,12 +284,22 @@ export default function AdminImportSources({ currentUser }) {
                     </button>
                   </td>
                   <td className="px-6 py-4">
-                    <button
-                      onClick={() => loadSourceDetail(source.id)}
-                      className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                    >
-                      Detail
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => loadSourceDetail(source.id)}
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                      >
+                        Detail
+                      </button>
+                      {source.api_key && (
+                        <button
+                          onClick={() => updateSource(source.id, { rate_limit: prompt('Novy rate limit:', source.rate_limit) || source.rate_limit })}
+                          className="text-gray-600 hover:text-gray-800 text-sm font-medium"
+                        >
+                          Upravit
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -289,74 +308,37 @@ export default function AdminImportSources({ currentUser }) {
         </table>
       </div>
 
-      {showCreateModal && (
+      {showGenerateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold mb-4">Pridat novy import source</h2>
-            <form onSubmit={createSource}>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Nazev RK
-                </label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({...formData, name: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Kontaktni email
-                </label>
-                <input
-                  type="email"
-                  value={formData.contact_email}
-                  onChange={(e) => setFormData({...formData, contact_email: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Kontaktni telefon
-                </label>
-                <input
-                  type="tel"
-                  value={formData.contact_phone}
-                  onChange={(e) => setFormData({...formData, contact_phone: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Rate limit (requestu/hodina)
-                </label>
-                <input
-                  type="number"
-                  value={formData.rate_limit}
-                  onChange={(e) => setFormData({...formData, rate_limit: parseInt(e.target.value)})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  min="1"
-                  max="1000"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-full hover:bg-blue-700"
-                >
-                  Vytvorit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-full hover:bg-gray-300"
-                >
-                  Zrusit
-                </button>
-              </div>
-            </form>
+            <h2 className="text-xl font-bold mb-4">Vygenerovat API klic</h2>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Rate limit (requestu/hodina)
+              </label>
+              <input
+                type="number"
+                value={rateLimit}
+                onChange={(e) => setRateLimit(parseInt(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                min="1"
+                max="1000"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => generateApiKey(selectedAgentId, rateLimit)}
+                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-full hover:bg-blue-700"
+              >
+                Vygenerovat
+              </button>
+              <button
+                onClick={() => setShowGenerateModal(false)}
+                className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-full hover:bg-gray-300"
+              >
+                Zrusit
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -445,16 +427,26 @@ export default function AdminImportSources({ currentUser }) {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-sm text-gray-600">Email</div>
-                  <div>{selectedSource.source.contact_email || '-'}</div>
+                  <div>{selectedSource.source.email || '-'}</div>
                 </div>
                 <div>
                   <div className="text-sm text-gray-600">Telefon</div>
-                  <div>{selectedSource.source.contact_phone || '-'}</div>
+                  <div>{selectedSource.source.phone || '-'}</div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-600">Rate limit</div>
-                  <div>{selectedSource.source.rate_limit} requestu/hodina</div>
+                  <div className="text-sm text-gray-600">Spolecnost</div>
+                  <div>{selectedSource.source.company_name || '-'}</div>
                 </div>
+                <div>
+                  <div className="text-sm text-gray-600">API Pristup</div>
+                  <div>{selectedSource.source.api_key ? 'Aktivni' : 'Neaktivni'}</div>
+                </div>
+                {selectedSource.source.api_key && (
+                  <div>
+                    <div className="text-sm text-gray-600">Rate limit</div>
+                    <div>{selectedSource.source.rate_limit} requestu/hodina</div>
+                  </div>
+                )}
                 <div>
                   <div className="text-sm text-gray-600">Posledni import</div>
                   <div>{selectedSource.stats.last_import ? new Date(selectedSource.stats.last_import).toLocaleString('cs-CZ') : 'Nikdy'}</div>
@@ -497,18 +489,34 @@ export default function AdminImportSources({ currentUser }) {
             </div>
 
             <div className="flex gap-2">
-              <button
-                onClick={() => regenerateApiKey(selectedSource.source.id)}
-                className="px-4 py-2 bg-yellow-600 text-white rounded-full hover:bg-yellow-700"
-              >
-                Regenerovat API klic
-              </button>
-              <button
-                onClick={() => deleteSource(selectedSource.source.id)}
-                className="px-4 py-2 bg-red-600 text-white rounded-full hover:bg-red-700"
-              >
-                Smazat
-              </button>
+              {selectedSource.source.api_key ? (
+                <>
+                  <button
+                    onClick={() => regenerateApiKey(selectedSource.source.id)}
+                    className="px-4 py-2 bg-yellow-600 text-white rounded-full hover:bg-yellow-700"
+                  >
+                    Regenerovat API klic
+                  </button>
+                  <button
+                    onClick={() => revokeApiKey(selectedSource.source.id)}
+                    className="px-4 py-2 bg-red-600 text-white rounded-full hover:bg-red-700"
+                  >
+                    Odebrat pristup
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => {
+                    setShowDetailModal(false);
+                    setSelectedAgentId(selectedSource.source.id);
+                    setRateLimit(100);
+                    setShowGenerateModal(true);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700"
+                >
+                  Vygenerovat API klic
+                </button>
+              )}
               <button
                 onClick={() => setShowDetailModal(false)}
                 className="ml-auto px-4 py-2 bg-gray-200 text-gray-800 rounded-full hover:bg-gray-300"

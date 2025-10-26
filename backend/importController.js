@@ -4,14 +4,14 @@ import db from './database.js';
 import { validatePropertyData, mapToInternalFormat } from './importMapper.js';
 
 // Helper funkce pro logování
-function logImport(sourceId, action, entityType, entityId, externalId, status, error = null, requestData = null, req) {
+function logImport(userId, action, entityType, entityId, externalId, status, error = null, requestData = null, req) {
   db.prepare(`
     INSERT INTO import_logs (
-      source_id, action, entity_type, entity_id, external_id, 
+      user_id, action, entity_type, entity_id, external_id, 
       status, error_message, request_data, ip_address, user_agent
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    sourceId,
+    userId,
     action,
     entityType,
     entityId,
@@ -56,7 +56,7 @@ export const importProperty = async (req, res) => {
     // Kontrola, zda už existuje mapování
     const existing = db.prepare(`
       SELECT internal_id FROM import_mappings 
-      WHERE source_id = ? AND external_id = ? AND entity_type = 'property'
+      WHERE user_id = ? AND external_id = ? AND entity_type = 'property'
     `).get(req.importSource.id, externalData.external_id);
     
     let propertyId;
@@ -147,7 +147,7 @@ export const importProperty = async (req, res) => {
       
       // Uložit mapování
       db.prepare(`
-        INSERT INTO import_mappings (source_id, external_id, internal_id, entity_type)
+        INSERT INTO import_mappings (user_id, external_id, internal_id, entity_type)
         VALUES (?, ?, ?, 'property')
       `).run(req.importSource.id, externalData.external_id, propertyId);
     }
@@ -202,7 +202,7 @@ export const deleteImportedProperty = async (req, res) => {
     // Najít mapování
     const mapping = db.prepare(`
       SELECT internal_id FROM import_mappings 
-      WHERE source_id = ? AND external_id = ? AND entity_type = 'property'
+      WHERE user_id = ? AND external_id = ? AND entity_type = 'property'
     `).get(req.importSource.id, external_id);
     
     if (!mapping) {
@@ -218,7 +218,7 @@ export const deleteImportedProperty = async (req, res) => {
     // Smazat mapování
     db.prepare(`
       DELETE FROM import_mappings 
-      WHERE source_id = ? AND external_id = ? AND entity_type = 'property'
+      WHERE user_id = ? AND external_id = ? AND entity_type = 'property'
     `).run(req.importSource.id, external_id);
     
     // Log
@@ -271,7 +271,7 @@ export const listImportedProperties = async (req, res) => {
         im.created_at as imported_at
       FROM properties p
       JOIN import_mappings im ON p.id = im.internal_id
-      WHERE im.source_id = ? AND im.entity_type = 'property'
+      WHERE im.user_id = ? AND im.entity_type = 'property'
       ORDER BY p.created_at DESC
     `).all(req.importSource.id);
     
@@ -300,13 +300,13 @@ export const getImportStats = async (req, res) => {
         SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed,
         COUNT(DISTINCT DATE(created_at)) as active_days
       FROM import_logs
-      WHERE source_id = ?
+      WHERE user_id = ?
     `).get(req.importSource.id);
     
     const recentLogs = db.prepare(`
       SELECT *
       FROM import_logs
-      WHERE source_id = ?
+      WHERE user_id = ?
       ORDER BY created_at DESC
       LIMIT 10
     `).all(req.importSource.id);

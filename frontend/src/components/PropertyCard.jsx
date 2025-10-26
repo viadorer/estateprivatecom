@@ -3,7 +3,7 @@ import { Building, Edit, Pause, Play } from 'lucide-react'
 
 const API_URL = '/api'
 
-export default function PropertyCard({ property, currentUser, formatPrice, LABELS_CS, onViewDetail, onEdit, onToggleStatus, onGenerateCode }) {
+export default function PropertyCard({ property, currentUser, formatPrice, LABELS_CS, onViewDetail, onEdit, onToggleStatus, onGenerateCode, onApprove }) {
   const [hasAccess, setHasAccess] = useState(null) // null = loading, true/false = result
 
   useEffect(() => {
@@ -81,11 +81,20 @@ export default function PropertyCard({ property, currentUser, formatPrice, LABEL
       
       <div className="flex items-center justify-between">
         <div className="text-2xl font-bold text-gradient">
-          {formatPrice(property.price)} Kč
+          {property.price_on_request ? 'Cena po podpisu LOI' : `${formatPrice(property.price)} Kč`}
         </div>
         <div className="flex space-x-2">
           {currentUser.role === 'admin' ? (
             <>
+              {property.status === 'pending_approval' && onApprove && (
+                <button 
+                  onClick={() => onApprove(property.id)} 
+                  className="px-4 py-2 rounded-full bg-green-500 text-white hover:bg-green-600 transition-all text-sm font-medium"
+                  title="Schválit nabídku"
+                >
+                  Schválit
+                </button>
+              )}
               <button 
                 onClick={() => onViewDetail(property)} 
                 className="glass-button-secondary rounded-full"

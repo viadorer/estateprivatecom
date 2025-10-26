@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import AdminImportSources from './components/AdminImportSources'
 import { Building2, Home, Search, Users as UsersIcon, LogOut, Building, Heart, Calendar, Edit, Pause, Play, Grid, List, Clock, User, FileText, Image as ImageIcon, Upload, X, Check, AlertCircle, Mail, Map, Plus, Trash2, MapPin, Lock } from 'lucide-react'
 import { LABELS_CS } from './constants'
@@ -20,16 +20,18 @@ import UserHistory from './components/UserHistory'
 import PropertiesMap from './components/PropertiesMap'
 import PropertyCard from './components/PropertyCard'
 
-const API_URL = '/api'
+const API_URL = 'http://localhost:3001/api'
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [documentsSubTab, setDocumentsSubTab] = useState('signed') // 'signed' nebo 'templates'
   const [properties, setProperties] = useState([])
   const [demands, setDemands] = useState([])
   const [users, setUsers] = useState([])
   const [companies, setCompanies] = useState([])
   const [registrationRequests, setRegistrationRequests] = useState([])
   const [emailTemplates, setEmailTemplates] = useState([])
+  const [contractTemplates, setContractTemplates] = useState([])
   const [stats, setStats] = useState({})
   const [loading, setLoading] = useState(true)
   const [currentUser, setCurrentUser] = useState(null)
@@ -160,14 +162,15 @@ function App() {
         fetch(`${API_URL}/stats`, { credentials: 'include' })
       ];
       
-      // Přidat registrace a emailové šablony pouze pro admina
+      // Přidat registrace, emailové šablony a smluvní šablony pouze pro admina
       if (currentUser.role === 'admin') {
         requests.push(fetch(`${API_URL}/registration-requests`, { credentials: 'include' }));
         requests.push(fetch(`${API_URL}/email-templates`, { credentials: 'include' }));
+        requests.push(fetch(`${API_URL}/contract-templates`, { credentials: 'include' }));
       }
       
       const responses = await Promise.all(requests);
-      const [propertiesRes, demandsRes, usersRes, companiesRes, statsRes, registrationsRes, emailTemplatesRes] = responses;
+      const [propertiesRes, demandsRes, usersRes, companiesRes, statsRes, registrationsRes, emailTemplatesRes, contractTemplatesRes] = responses;
       
       if (propertiesRes.ok) {
         setProperties(await propertiesRes.json())
@@ -210,6 +213,12 @@ function App() {
         setEmailTemplates(await emailTemplatesRes.json())
       } else if (emailTemplatesRes) {
         setEmailTemplates([])
+      }
+      
+      if (contractTemplatesRes && contractTemplatesRes.ok) {
+        setContractTemplates(await contractTemplatesRes.json())
+      } else if (contractTemplatesRes) {
+        setContractTemplates([])
       }
       
       setLoading(false)
@@ -285,8 +294,14 @@ function App() {
       })
       
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Přihlášení selhalo')
+        let errorMessage = 'Přihlášení selhalo'
+        try {
+          const error = await response.json()
+          errorMessage = error.error || errorMessage
+        } catch (e) {
+          // Pokud odpověď není JSON, použij výchozí zprávu
+        }
+        throw new Error(errorMessage)
       }
       
       const user = await response.json()
@@ -332,15 +347,17 @@ function App() {
           <div className="flex justify-between items-center">
             {/* Logo */}
             <div className="flex items-center space-x-3">
-              <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-2 rounded-xl">
-                <Building2 className="w-8 h-8 text-white" />
-              </div>
+              <img 
+                src="/logo.png" 
+                alt="Estate Private" 
+                className="h-12 w-auto"
+              />
               <div className="hidden sm:block">
-                <h1 className="text-2xl font-bold text-gradient">Estate Private</h1>
+                <h1 className="text-2xl font-bold" style={{ color: 'var(--primary-600)' }}>Estate Private</h1>
                 <p className="text-xs text-gray-500">Off-market realitni platforma</p>
               </div>
               <div className="sm:hidden">
-                <h1 className="text-xl font-bold text-gradient">PE</h1>
+                <h1 className="text-xl font-bold" style={{ color: 'var(--primary-600)' }}>Estate Private</h1>
               </div>
             </div>
             
@@ -646,7 +663,11 @@ function App() {
         {!currentUser ? (
           <div className="flex items-center justify-center h-96">
             <div className="glass-card text-center p-12">
-              <Building2 className="w-20 h-20 text-purple-500 mx-auto mb-4" />
+              <img 
+                src="/logo.png" 
+                alt="Estate Private" 
+                className="h-24 w-auto mx-auto mb-6"
+              />
               <h2 className="text-3xl font-bold text-gradient mb-4">Vítejte na Estate Private</h2>
               <p className="text-gray-600 mb-6 max-w-2xl">Vítejte na exkluzivní platformě pro off-market nemovitosti - nabídky a poptávky, které nenajdete nikde jinde. Propojujeme realitní agenty s klienty prostřednictvím inteligentního párování a zajišťujeme maximální ochranu dat.</p>
               <button onClick={() => setShowLoginModal(true)} className="glass-button rounded-full">
@@ -685,6 +706,24 @@ function App() {
                   setCodeEntityType('property');
                   setShowGenerateCodeModal(true);
                 }}
+                onApprove={async (propertyId) => {
+                  try {
+                    const response = await fetch(`${API_URL}/properties/${propertyId}/approve`, {
+                      method: 'POST',
+                      credentials: 'include'
+                    });
+                    if (response.ok) {
+                      const result = await response.json();
+                      alert(`Nabídka schválena! Odesláno ${result.notificationsSent} emailů.`);
+                      fetchData();
+                    } else {
+                      alert('Chyba při schvalování nabídky');
+                    }
+                  } catch (error) {
+                    console.error('Chyba při schvalování:', error);
+                    alert('Chyba při schvalování nabídky');
+                  }
+                }}
               />
             )}
             {activeTab === 'demands' && (
@@ -703,6 +742,24 @@ function App() {
                   setSelectedEntityForCode(demand);
                   setCodeEntityType('demand');
                   setShowGenerateCodeModal(true);
+                }}
+                onApprove={async (demandId) => {
+                  try {
+                    const response = await fetch(`${API_URL}/demands/${demandId}/approve`, {
+                      method: 'POST',
+                      credentials: 'include'
+                    });
+                    if (response.ok) {
+                      const result = await response.json();
+                      alert(`Poptávka schválena! Odesláno ${result.notificationsSent} emailů.`);
+                      fetchData();
+                    } else {
+                      alert('Chyba při schvalování poptávky');
+                    }
+                  } catch (error) {
+                    console.error('Chyba při schvalování:', error);
+                    alert('Chyba při schvalování poptávky');
+                  }
                 }}
               />
             )}
@@ -793,8 +850,46 @@ function App() {
             )}
             {activeTab === 'documents' && (
               <div className="fade-in">
-                <h1 className="text-4xl font-bold text-white mb-8">Podepsané dokumenty</h1>
-                <SignedDocuments userId={currentUser.id} userRole={currentUser.role} />
+                <h1 className="text-4xl font-bold mb-8" style={{ color: 'var(--primary-600)' }}>Dokumenty</h1>
+                
+                {/* Sub-taby */}
+                <div className="glass-card mb-6 p-2">
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => setDocumentsSubTab('signed')}
+                      className={`px-6 py-2.5 rounded-full transition-all text-sm font-medium ${
+                        documentsSubTab === 'signed'
+                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                          : 'hover:bg-white/30'
+                      }`}
+                    >
+                      Podepsané dokumenty
+                    </button>
+                    {currentUser.role === 'admin' && (
+                      <button
+                        onClick={() => setDocumentsSubTab('templates')}
+                        className={`px-6 py-2.5 rounded-full transition-all text-sm font-medium ${
+                          documentsSubTab === 'templates'
+                            ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                            : 'hover:bg-white/30'
+                        }`}
+                      >
+                        Smluvní šablony
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                {documentsSubTab === 'signed' && (
+                  <SignedDocuments userId={currentUser.id} userRole={currentUser.role} />
+                )}
+                
+                {documentsSubTab === 'templates' && currentUser.role === 'admin' && (
+                  <ContractTemplatesManager 
+                    templates={contractTemplates}
+                    onUpdate={fetchData}
+                  />
+                )}
               </div>
             )}
           </>
@@ -1217,7 +1312,7 @@ function Dashboard({ stats, currentUser }) {
   )
 }
 
-function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAdd, onEdit, onDelete, onToggleStatus, onViewDetail, onGenerateCode }) {
+function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAdd, onEdit, onDelete, onToggleStatus, onViewDetail, onGenerateCode, onApprove }) {
   const [viewMode, setViewMode] = useState('grid') // grid, list, map, hidden
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(12)
@@ -1236,7 +1331,8 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
     price_min: '',
     price_max: '',
     location_search: '',
-    location_radius: '0'
+    location_radius: '0',
+    mine: false // Filtr pro "Moje nabídky"
   })
   const [locationSuggestions, setLocationSuggestions] = useState([])
   const [selectedLocation, setSelectedLocation] = useState(null)
@@ -1289,6 +1385,9 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
       if (!property.city.toLowerCase().includes(filters.location_search.toLowerCase())) return false
     }
     
+    // Filtr "Moje nabídky"
+    if (filters.mine && Number(property.agent_id) !== Number(currentUser.id)) return false
+    
     return true
   }) : []
 
@@ -1329,6 +1428,22 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
       <div className="glass-card mb-6 p-6">
         {/* Filtry - styl navigace */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
+          {(currentUser.role === 'agent' || currentUser.role === 'admin') && (
+            <>
+              <button
+                onClick={() => setFilters({ ...filters, mine: !filters.mine })}
+                className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+                  filters.mine
+                    ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg' 
+                    : 'hover:bg-white/30'
+                }`}
+              >
+                Moje nabídky
+              </button>
+              <div className="h-6 w-px bg-gray-300 mx-2"></div>
+            </>
+          )}
+          
           <button
             onClick={() => setFilters({ ...filters, transaction_type: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
@@ -1687,6 +1802,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
               onEdit={onEdit}
               onToggleStatus={onToggleStatus}
               onGenerateCode={onGenerateCode}
+              onApprove={onApprove}
             />
           ))}
         </div>
@@ -1894,7 +2010,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
   )
 }
 
-function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, onGenerateCode }) {
+function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, onGenerateCode, onApprove }) {
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(12)
   const [filters, setFilters] = useState({
@@ -1904,7 +2020,8 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
     price_min: '',
     price_max: '',
     location_search: '',
-    location_radius: '0'
+    location_radius: '0',
+    mine: false // Filtr pro "Moje poptávky"
   })
   const [locationSuggestions, setLocationSuggestions] = useState([])
   const [selectedLocation, setSelectedLocation] = useState(null)
@@ -1971,6 +2088,9 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
       if (!demand.preferred_location.toLowerCase().includes(filters.location_search.toLowerCase())) return false
     }
     
+    // Filtr "Moje poptávky"
+    if (filters.mine && Number(demand.client_id) !== Number(currentUser.id)) return false
+    
     return true
   })
 
@@ -2015,6 +2135,22 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
       <div className="glass-card mb-6 p-6">
         {/* Filtry - styl navigace */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
+          {(currentUser.role === 'client' || currentUser.role === 'admin') && (
+            <>
+              <button
+                onClick={() => setFilters({ ...filters, mine: !filters.mine })}
+                className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
+                  filters.mine
+                    ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg' 
+                    : 'hover:bg-white/30'
+                }`}
+              >
+                Moje poptávky
+              </button>
+              <div className="h-6 w-px bg-gray-300 mx-2"></div>
+            </>
+          )}
+          
           <button
             onClick={() => setFilters({ ...filters, transaction_type: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
@@ -2377,6 +2513,15 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
                 <div className="flex space-x-2">
                   {canViewFull ? (
                     <>
+                      {currentUser.role === 'admin' && demand.status === 'pending_approval' && onApprove && (
+                        <button 
+                          onClick={() => onApprove(demand.id)} 
+                          className="px-4 py-2 rounded-full bg-green-500 text-white hover:bg-green-600 transition-all text-sm font-medium"
+                          title="Schválit poptávku"
+                        >
+                          Schválit
+                        </button>
+                      )}
                       <button 
                         onClick={() => onViewDetail(demand)} 
                         className="glass-button rounded-full"
@@ -2919,11 +3064,21 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Cena (Kč)</label>
                 <input
                   type="number"
-                  required
+                  required={!formData.price_on_request}
                   value={formData.price}
                   onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                   className="glass-input"
+                  disabled={formData.price_on_request}
                 />
+                <label className="flex items-center mt-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={formData.price_on_request || false}
+                    onChange={(e) => setFormData({ ...formData, price_on_request: e.target.checked ? 1 : 0 })}
+                    className="mr-2"
+                  />
+                  <span className="text-gray-700">Cena po podpisu LOI</span>
+                </label>
               </div>
               
               <div>
@@ -7553,6 +7708,165 @@ function EmailTemplateEditModal({ template, onClose, onSave }) {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ContractTemplatesManager({ templates, onUpdate }) {
+  const [selectedTemplate, setSelectedTemplate] = useState(null)
+  const [showModal, setShowModal] = useState(false)
+  const [formData, setFormData] = useState({
+    template_key: '',
+    name: '',
+    description: '',
+    template_content: '',
+    variables: ''
+  })
+
+  console.log('Contract templates:', templates)
+
+  const handleEdit = (template) => {
+    setSelectedTemplate(template)
+    setFormData({
+      template_key: template.template_key,
+      name: template.name,
+      description: template.description || '',
+      template_content: template.template_content,
+      variables: template.variables || ''
+    })
+    setShowModal(true)
+  }
+
+  const handleSave = async () => {
+    try {
+      const response = await fetch(`${API_URL}/contract-templates/${selectedTemplate.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(formData)
+      })
+
+      if (!response.ok) {
+        throw new Error('Chyba pri ukladani')
+      }
+
+      alert('Sablona byla ulozena')
+      setShowModal(false)
+      onUpdate()
+    } catch (error) {
+      alert('Chyba: ' + error.message)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {!templates || templates.length === 0 ? (
+        <div className="glass-card p-8 text-center">
+          <p className="text-gray-600">Žádné šablony k dispozici</p>
+        </div>
+      ) : (
+        templates.map(template => (
+        <div key={template.id} className="glass-card p-6">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">{template.name}</h3>
+              <p className="text-sm text-gray-600 mt-1">{template.description}</p>
+              <span className="inline-block mt-2 px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
+                {template.template_key}
+              </span>
+            </div>
+            <button
+              onClick={() => handleEdit(template)}
+              className="glass-button-secondary px-4 py-2 rounded-full"
+            >
+              Upravit
+            </button>
+          </div>
+          
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-600 mb-2">Náhled obsahu:</p>
+            <p className="text-sm text-gray-800 whitespace-pre-wrap line-clamp-3">
+              {template.template_content}
+            </p>
+          </div>
+        </div>
+      ))
+      )}
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="glass-card max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">Upravit šablonu</h2>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Název</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="glass-input"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Popis</label>
+                  <input
+                    type="text"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    className="glass-input"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Obsah šablony
+                    <span className="text-xs text-gray-500 ml-2">
+                      Použijte placeholdery: {'{'}{'{'} user_name {'}'}{'}'},  {'{'}{'{'} user_email {'}'}{'}'},  {'{'}{'{'} signature_date {'}'}{'}'}, atd.
+                    </span>
+                  </label>
+                  <textarea
+                    value={formData.template_content}
+                    onChange={(e) => setFormData({ ...formData, template_content: e.target.value })}
+                    className="glass-input font-mono text-sm"
+                    rows={20}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Proměnné (JSON)
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.variables}
+                    onChange={(e) => setFormData({ ...formData, variables: e.target.value })}
+                    className="glass-input font-mono text-sm"
+                    placeholder='["user_name", "user_email", "signature_date"]'
+                  />
+                </div>
+              </div>
+
+              <div className="flex space-x-3 mt-6">
+                <button
+                  onClick={() => setShowModal(false)}
+                  className="glass-button-secondary flex-1 rounded-full"
+                >
+                  Zrušit
+                </button>
+                <button
+                  onClick={handleSave}
+                  className="glass-button flex-1 rounded-full"
+                >
+                  Uložit změny
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

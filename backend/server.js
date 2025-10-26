@@ -13,6 +13,7 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import db from './database.js';
+import DEV_CONFIG, { printDevConfig } from './devConfig.js';
 import { sendAccessCode, sendWelcomeEmail, sendEmail, sendRegistrationApproval } from './emailService.js';
 import { 
   notifyPropertyApproved, 
@@ -54,7 +55,8 @@ if (!process.env.JWT_SECRET) {
 // Security middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false // Vypnuto kvuli inline styles, v produkci zapnout
+  contentSecurityPolicy: false, // Vypnuto kvuli inline styles, v produkci zapnout
+  hsts: process.env.NODE_ENV === 'production' // HSTS pouze v produkci
 }));
 
 // CORS s credentials
@@ -70,17 +72,25 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minut
-  max: 100, // max 100 requestu
-  message: 'Příliš mnoho požadavků, zkuste to později'
+  max: DEV_CONFIG.rateLimiting.apiLimit || 100,
+  message: 'Příliš mnoho požadavků, zkuste to později',
+  skip: () => !DEV_CONFIG.rateLimiting.enabled // Skip pokud je vypnuto
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5, // max 5 pokusů o přihlášení
-  message: 'Příliš mnoho pokusů o přihlášení, zkuste to za 15 minut'
+  max: DEV_CONFIG.rateLimiting.authLimit || 50,
+  message: 'Příliš mnoho pokusů o přihlášení, zkuste to za 15 minut',
+  skip: () => !DEV_CONFIG.rateLimiting.enabled // Skip pokud je vypnuto
 });
 
-app.use('/api/', limiter);
+// Aplikovat rate limiting pouze pokud je zapnuto
+if (DEV_CONFIG.rateLimiting.enabled) {
+  app.use('/api/', limiter);
+  console.log('[RATE LIMIT] Rate limiting je ZAPNUTO');
+} else {
+  console.log('[RATE LIMIT] Rate limiting je VYPNUTO');
+}
 
 // ==================== MULTER CONFIG ====================
 
@@ -287,17 +297,19 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
     
     // Nastavit cookies
-    res.cookie('auth_token', accessToken, {
+    const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: false, // Pro development na HTTP
+      sameSite: 'lax', // Zmena z 'strict' na 'lax' pro lepsi kompatibilitu
+    };
+    
+    res.cookie('auth_token', accessToken, {
+      ...cookieOptions,
       maxAge: 15 * 60 * 1000 // 15 minut
     });
     
     res.cookie('refresh_token', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      ...cookieOptions,
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 dní
     });
     
@@ -371,8 +383,8 @@ app.post('/api/auth/refresh', async (req, res) => {
     
     res.cookie('auth_token', accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: false,
+      sameSite: 'lax',
       maxAge: 15 * 60 * 1000
     });
     
@@ -1593,6 +1605,52 @@ app.get('/api/properties/matching/:userId', (req, res) => {
   }
 });
 
+// Schvalit nabidku (admin)
+app.post('/api/properties/:id/approve', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(id);
+    
+    if (!property) {
+      return res.status(404).json({ error: 'Nabidka nenalezena' });
+    }
+    
+    // Aktualizovat status
+    db.prepare('UPDATE properties SET status = ? WHERE id = ?').run('active', id);
+    
+    // Odeslat email agentovi
+    const { sendEmailFromTemplate } = await import('./emailService.js');
+    const agent = db.prepare('SELECT name, email FROM users WHERE id = ?').get(property.agent_id);
+    
+    // Najit pocet shod
+    const matchCount = db.prepare(`
+      SELECT COUNT(*) as count FROM demands d
+      WHERE d.status = 'active'
+        AND d.transaction_type = ?
+        AND d.property_type = ?
+    `).get(property.transaction_type, property.property_type).count;
+    
+    await sendEmailFromTemplate('property_approved', agent.email, {
+      recipientName: agent.name,
+      propertyTitle: property.title,
+      matchCount: matchCount
+    }, property.agent_id);
+    
+    // Odeslat notifikace klientum s odpovida jicimi poptavkami
+    const { notifyClientsAboutNewProperty } = await import('./notificationService.js');
+    const result = await notifyClientsAboutNewProperty(id);
+    
+    res.json({ 
+      success: true, 
+      message: 'Nabidka schvalena',
+      notificationsSent: result.sentCount || 0
+    });
+  } catch (error) {
+    console.error('Chyba pri schvalovani nabidky:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== DEMANDS ====================
 
 // Získat všechny poptávky
@@ -1631,14 +1689,18 @@ app.get('/api/demands', (req, res) => {
     const demands = db.prepare(query).all(...params);
 
     demands.forEach(demand => {
-      // Stará struktura
-      if (demand.cities) demand.cities = JSON.parse(demand.cities);
-      if (demand.districts) demand.districts = JSON.parse(demand.districts);
-      if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
-      // Nová struktura
-      if (demand.property_requirements) demand.property_requirements = JSON.parse(demand.property_requirements);
-      if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
-      if (demand.locations) demand.locations = JSON.parse(demand.locations);
+      try {
+        // Stará struktura
+        if (demand.cities && typeof demand.cities === 'string') demand.cities = JSON.parse(demand.cities);
+        if (demand.districts && typeof demand.districts === 'string') demand.districts = JSON.parse(demand.districts);
+        if (demand.required_features && typeof demand.required_features === 'string') demand.required_features = JSON.parse(demand.required_features);
+        // Nová struktura
+        if (demand.property_requirements && typeof demand.property_requirements === 'string') demand.property_requirements = JSON.parse(demand.property_requirements);
+        if (demand.common_filters && typeof demand.common_filters === 'string') demand.common_filters = JSON.parse(demand.common_filters);
+        if (demand.locations && typeof demand.locations === 'string') demand.locations = JSON.parse(demand.locations);
+      } catch (parseError) {
+        console.error(`Chyba pri parsovani JSON pro demand ${demand.id}:`, parseError.message);
+      }
       
       // Agent nevidí kontaktní údaje - musí požádat o přístup
       if (userRole === 'agent') {
@@ -1657,6 +1719,9 @@ app.get('/api/demands', (req, res) => {
 
     res.json(demands);
   } catch (error) {
+    console.error('[ERROR] GET /api/demands:', error.message);
+    console.error('[ERROR] Stack:', error.stack);
+    console.error('[ERROR] Query params:', req.query);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1933,6 +1998,51 @@ app.delete('/api/demands/:id', (req, res) => {
     
     res.json({ message: 'Poptávka smazána' });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Schvalit poptavku (admin)
+app.post('/api/demands/:id/approve', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(id);
+    
+    if (!demand) {
+      return res.status(404).json({ error: 'Poptavka nenalezena' });
+    }
+    
+    // Aktualizovat status
+    db.prepare('UPDATE demands SET status = ? WHERE id = ?').run('active', id);
+    
+    // Odeslat email klientovi
+    const { sendEmailFromTemplate } = await import('./emailService.js');
+    const client = db.prepare('SELECT name, email FROM users WHERE id = ?').get(demand.client_id);
+    
+    // Najit pocet shod
+    const matchCount = db.prepare(`
+      SELECT COUNT(*) as count FROM properties p
+      WHERE p.status = 'active'
+        AND p.transaction_type = ?
+        AND p.property_type = ?
+    `).get(demand.transaction_type, demand.property_type).count;
+    
+    await sendEmailFromTemplate('demand_approved', client.email, {
+      recipientName: client.name,
+      matchCount: matchCount
+    }, demand.client_id);
+    
+    // Odeslat notifikace agentum s odpovida jicimi nabidkami
+    const { notifyAgentsAboutNewDemand } = await import('./notificationService.js');
+    const result = await notifyAgentsAboutNewDemand(id);
+    
+    res.json({ 
+      success: true, 
+      message: 'Poptavka schvalena',
+      notificationsSent: result.sentCount || 0
+    });
+  } catch (error) {
+    console.error('Chyba pri schvalovani poptavky:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -3420,7 +3530,7 @@ app.post('/api/loi/sign', async (req, res) => {
       // Získat šablonu LOI
       const template = db.prepare(`
         SELECT * FROM contract_templates 
-        WHERE template_type = 'loi' AND is_active = 1
+        WHERE template_key = 'loi' AND is_active = 1
         ORDER BY created_at DESC LIMIT 1
       `).get();
       
@@ -4256,7 +4366,7 @@ app.get('/api/contract-templates/:type', (req, res) => {
     
     const template = db.prepare(`
       SELECT * FROM contract_templates 
-      WHERE template_type = ? AND is_active = 1
+      WHERE template_key = ? AND is_active = 1
       ORDER BY created_at DESC
       LIMIT 1
     `).get(type)
@@ -4275,14 +4385,41 @@ app.get('/api/contract-templates/:type', (req, res) => {
 // Získat všechny šablony (admin)
 app.get('/api/contract-templates', (req, res) => {
   try {
+    console.log('[CONTRACT TEMPLATES] Nacitam sablony...')
     const templates = db.prepare(`
       SELECT * FROM contract_templates 
-      ORDER BY template_type, created_at DESC
+      ORDER BY template_key, created_at DESC
     `).all()
     
+    console.log('[CONTRACT TEMPLATES] Nalezeno sablon:', templates.length)
     res.json(templates)
   } catch (error) {
-    console.error('Chyba při načítání šablon:', error)
+    console.error('[ERROR] /api/contract-templates:', error.message)
+    console.error('[ERROR] Stack:', error.stack)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Aktualizovat šablonu (admin)
+app.put('/api/contract-templates/:id', (req, res) => {
+  try {
+    const { id } = req.params
+    const { name, description, template_content, variables } = req.body
+    
+    db.prepare(`
+      UPDATE contract_templates 
+      SET name = ?,
+          description = ?,
+          template_content = ?,
+          variables = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(name, description, template_content, variables, id)
+    
+    const updated = db.prepare('SELECT * FROM contract_templates WHERE id = ?').get(id)
+    res.json(updated)
+  } catch (error) {
+    console.error('Chyba při aktualizaci šablony:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -4455,7 +4592,7 @@ app.post('/api/auth/verify-loi-code', async (req, res) => {
       // Získat šablonu LOI
       const template = db.prepare(`
         SELECT * FROM contract_templates 
-        WHERE template_type = 'loi' AND is_active = 1
+        WHERE template_key = 'loi' AND is_active = 1
         ORDER BY created_at DESC LIMIT 1
       `).get();
       
@@ -4685,21 +4822,33 @@ app.get('/api/import/stats',
   getImportStats
 );
 
-// ==================== ADMIN - IMPORT SOURCES ====================
+// ==================== ADMIN - IMPORT SOURCES (AGENTS) ====================
 
-// Ziskat vsechny import sources (pouze admin)
+// Ziskat vsechny agenty s import API pristupem (pouze admin)
 app.get('/api/admin/import-sources', authenticateToken, requireRole('admin'), (req, res) => {
   try {
     const sources = db.prepare(`
       SELECT 
-        s.*,
+        u.id,
+        u.name,
+        u.email,
+        u.phone,
+        u.company_id,
+        u.api_key,
+        u.rate_limit,
+        u.is_active,
+        u.created_at,
+        u.updated_at,
+        c.name as company_name,
         COUNT(DISTINCT l.id) as total_imports,
         SUM(CASE WHEN l.status = 'success' THEN 1 ELSE 0 END) as successful_imports,
         MAX(l.created_at) as last_import
-      FROM import_sources s
-      LEFT JOIN import_logs l ON s.id = l.source_id
-      GROUP BY s.id
-      ORDER BY s.created_at DESC
+      FROM users u
+      LEFT JOIN companies c ON u.company_id = c.id
+      LEFT JOIN import_logs l ON u.id = l.user_id
+      WHERE u.role = 'agent'
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
     `).all();
     
     res.json({ success: true, sources });
@@ -4709,15 +4858,20 @@ app.get('/api/admin/import-sources', authenticateToken, requireRole('admin'), (r
   }
 });
 
-// Ziskat jeden import source (pouze admin)
+// Ziskat jednoho agenta s import API pristupem (pouze admin)
 app.get('/api/admin/import-sources/:id', authenticateToken, requireRole('admin'), (req, res) => {
   try {
     const { id } = req.params;
     
-    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    const source = db.prepare(`
+      SELECT u.*, c.name as company_name
+      FROM users u
+      LEFT JOIN companies c ON u.company_id = c.id
+      WHERE u.id = ? AND u.role = 'agent'
+    `).get(id);
     
     if (!source) {
-      return res.status(404).json({ error: 'Import source nenalezen' });
+      return res.status(404).json({ error: 'Agent nenalezen' });
     }
     
     // Statistiky
@@ -4728,13 +4882,13 @@ app.get('/api/admin/import-sources/:id', authenticateToken, requireRole('admin')
         SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed,
         MAX(created_at) as last_import
       FROM import_logs
-      WHERE source_id = ?
+      WHERE user_id = ?
     `).get(id);
     
     // Posledni importy
     const recentImports = db.prepare(`
       SELECT * FROM import_logs
-      WHERE source_id = ?
+      WHERE user_id = ?
       ORDER BY created_at DESC
       LIMIT 20
     `).all(id);
@@ -4746,113 +4900,118 @@ app.get('/api/admin/import-sources/:id', authenticateToken, requireRole('admin')
       recent_imports: recentImports
     });
   } catch (error) {
-    console.error('Chyba pri nacteni import source:', error);
+    console.error('Chyba pri nacteni agenta:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Vytvorit novy import source (pouze admin)
-app.post('/api/admin/import-sources', authenticateToken, requireRole('admin'), (req, res) => {
+// Vygenerovat API klic pro agenta (pouze admin)
+app.post('/api/admin/import-sources/:id/generate-key', authenticateToken, requireRole('admin'), (req, res) => {
   try {
-    const { name, contact_email, contact_phone, rate_limit } = req.body;
+    const { id } = req.params;
+    const { rate_limit } = req.body;
     
-    if (!name) {
-      return res.status(400).json({ error: 'Nazev je povinny' });
+    const agent = db.prepare('SELECT * FROM users WHERE id = ? AND role = \'agent\'').get(id);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent nenalezen' });
     }
     
     // Vygenerovat API klic
     const apiKey = 'rk_' + crypto.randomBytes(32).toString('hex');
     
-    const result = db.prepare(`
-      INSERT INTO import_sources (name, api_key, contact_email, contact_phone, rate_limit)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(name, apiKey, contact_email || null, contact_phone || null, rate_limit || 100);
+    db.prepare(`
+      UPDATE users 
+      SET api_key = ?, rate_limit = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(apiKey, rate_limit || 100, id);
     
-    const newSource = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(result.lastInsertRowid);
+    const updatedAgent = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     
     // Log akce
-    logAction(req.user.userId, 'create', 'import_source', result.lastInsertRowid, `Vytvoren import source: ${name}`, req);
+    logAction(req.user.userId, 'generate_api_key', 'user', id, `Vygenerovan API klic pro agenta: ${agent.name}`, req);
     
     res.json({ 
       success: true, 
-      source: newSource,
-      message: 'Import source vytvoren'
+      source: updatedAgent,
+      message: 'API klic vygenerovan'
     });
   } catch (error) {
-    console.error('Chyba pri vytvareni import source:', error);
+    console.error('Chyba pri generovani API klice:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Aktualizovat import source (pouze admin)
+// Aktualizovat rate limit agenta (pouze admin)
 app.put('/api/admin/import-sources/:id', authenticateToken, requireRole('admin'), (req, res) => {
   try {
     const { id } = req.params;
-    const { name, contact_email, contact_phone, rate_limit, is_active } = req.body;
+    const { rate_limit, is_active } = req.body;
     
-    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    const agent = db.prepare('SELECT * FROM users WHERE id = ? AND role = \'agent\'').get(id);
     
-    if (!source) {
-      return res.status(404).json({ error: 'Import source nenalezen' });
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent nenalezen' });
     }
     
     db.prepare(`
-      UPDATE import_sources 
-      SET name = ?, contact_email = ?, contact_phone = ?, rate_limit = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+      UPDATE users 
+      SET rate_limit = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
-      name || source.name,
-      contact_email !== undefined ? contact_email : source.contact_email,
-      contact_phone !== undefined ? contact_phone : source.contact_phone,
-      rate_limit !== undefined ? rate_limit : source.rate_limit,
-      is_active !== undefined ? is_active : source.is_active,
+      rate_limit !== undefined ? rate_limit : agent.rate_limit,
+      is_active !== undefined ? is_active : agent.is_active,
       id
     );
     
-    const updatedSource = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    const updatedAgent = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     
     // Log akce
-    logAction(req.user.userId, 'update', 'import_source', id, `Aktualizovan import source: ${updatedSource.name}`, req);
+    logAction(req.user.userId, 'update', 'user', id, `Aktualizovan import pristup pro agenta: ${updatedAgent.name}`, req);
     
     res.json({ 
       success: true, 
-      source: updatedSource,
-      message: 'Import source aktualizovan'
+      source: updatedAgent,
+      message: 'Import pristup aktualizovan'
     });
   } catch (error) {
-    console.error('Chyba pri aktualizaci import source:', error);
+    console.error('Chyba pri aktualizaci import pristupu:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Regenerovat API klic (pouze admin)
+// Regenerovat API klic pro agenta (pouze admin)
 app.post('/api/admin/import-sources/:id/regenerate-key', authenticateToken, requireRole('admin'), (req, res) => {
   try {
     const { id } = req.params;
     
-    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    const agent = db.prepare('SELECT * FROM users WHERE id = ? AND role = \'agent\'').get(id);
     
-    if (!source) {
-      return res.status(404).json({ error: 'Import source nenalezen' });
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent nenalezen' });
+    }
+    
+    if (!agent.api_key) {
+      return res.status(400).json({ error: 'Agent nema vygenerovany API klic' });
     }
     
     // Vygenerovat novy API klic
     const newApiKey = 'rk_' + crypto.randomBytes(32).toString('hex');
     
     db.prepare(`
-      UPDATE import_sources 
+      UPDATE users 
       SET api_key = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(newApiKey, id);
     
-    const updatedSource = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    const updatedAgent = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     
     // Log akce
-    logAction(req.user.userId, 'regenerate_key', 'import_source', id, `Regenerovan API klic pro: ${source.name}`, req);
+    logAction(req.user.userId, 'regenerate_key', 'user', id, `Regenerovan API klic pro agenta: ${agent.name}`, req);
     
     res.json({ 
       success: true, 
-      source: updatedSource,
+      source: updatedAgent,
       message: 'API klic regenerovan'
     });
   } catch (error) {
@@ -4861,29 +5020,33 @@ app.post('/api/admin/import-sources/:id/regenerate-key', authenticateToken, requ
   }
 });
 
-// Smazat import source (pouze admin)
-app.delete('/api/admin/import-sources/:id', authenticateToken, requireRole('admin'), (req, res) => {
+// Odebrat API pristup agentovi (pouze admin)
+app.delete('/api/admin/import-sources/:id/revoke-key', authenticateToken, requireRole('admin'), (req, res) => {
   try {
     const { id } = req.params;
     
-    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    const agent = db.prepare('SELECT * FROM users WHERE id = ? AND role = \'agent\'').get(id);
     
-    if (!source) {
-      return res.status(404).json({ error: 'Import source nenalezen' });
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent nenalezen' });
     }
     
-    // Smazat import source (cascade smaze i logy a mappingy)
-    db.prepare('DELETE FROM import_sources WHERE id = ?').run(id);
+    // Odebrat API klic
+    db.prepare(`
+      UPDATE users 
+      SET api_key = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
     
     // Log akce
-    logAction(req.user.userId, 'delete', 'import_source', id, `Smazan import source: ${source.name}`, req);
+    logAction(req.user.userId, 'revoke_api_key', 'user', id, `Odebran API pristup agentovi: ${agent.name}`, req);
     
     res.json({ 
       success: true,
-      message: 'Import source smazan'
+      message: 'API pristup odebran'
     });
   } catch (error) {
-    console.error('Chyba pri mazani import source:', error);
+    console.error('Chyba pri odebirani API pristupu:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -4894,7 +5057,7 @@ app.get('/api/admin/import-stats', authenticateToken, requireRole('admin'), (req
     // Celkove statistiky
     const totalStats = db.prepare(`
       SELECT 
-        COUNT(DISTINCT source_id) as total_sources,
+        COUNT(DISTINCT user_id) as total_sources,
         COUNT(*) as total_imports,
         SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
         SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed,
@@ -4915,17 +5078,18 @@ app.get('/api/admin/import-stats', authenticateToken, requireRole('admin'), (req
       ORDER BY date DESC
     `).all();
     
-    // Top RK
+    // Top agenti
     const topSources = db.prepare(`
       SELECT 
-        s.id,
-        s.name,
+        u.id,
+        u.name,
         COUNT(*) as imports,
         SUM(CASE WHEN l.status = 'success' THEN 1 ELSE 0 END) as successful,
         MAX(l.created_at) as last_import
       FROM import_logs l
-      JOIN import_sources s ON l.source_id = s.id
-      GROUP BY s.id
+      JOIN users u ON l.user_id = u.id
+      WHERE u.role = 'agent'
+      GROUP BY u.id
       ORDER BY imports DESC
       LIMIT 10
     `).all();
@@ -4947,4 +5111,7 @@ app.get('/api/admin/import-stats', authenticateToken, requireRole('admin'), (req
 app.listen(PORT, () => {
   console.log(`[SERVER] Realitni API bezi na http://localhost:${PORT}`);
   console.log(`[IMPORT] Import API: http://localhost:${PORT}/api/import`);
+  
+  // Vypsat vyvojovou konfiguraci (vzdy, pokud neni explicitne production)
+  printDevConfig();
 });

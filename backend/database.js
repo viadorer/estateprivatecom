@@ -63,6 +63,17 @@ db.exec(`
     -- Poznámky (pro agenty)
     notes TEXT,
     
+    -- Import API (pro agenty)
+    api_key TEXT UNIQUE,
+    rate_limit INTEGER DEFAULT 100,
+    
+    -- Verifikace a notifikace
+    verified_agent INTEGER DEFAULT 0,
+    notify_new_properties INTEGER DEFAULT 1,
+    notify_new_demands INTEGER DEFAULT 1,
+    notification_frequency TEXT DEFAULT 'immediate',
+    min_match_score INTEGER DEFAULT 70,
+    
     -- Metadata
     last_login DATETIME,
     is_active INTEGER DEFAULT 1,
@@ -89,6 +100,7 @@ db.exec(`
     
     price REAL NOT NULL,
     price_note TEXT,
+    price_on_request INTEGER DEFAULT 0,
     
     city TEXT NOT NULL,
     district TEXT,
@@ -140,6 +152,8 @@ db.exec(`
     
     is_reserved INTEGER DEFAULT 0,
     reserved_until DATETIME,
+    valid_until DATETIME,
+    last_confirmed_at DATETIME,
     
     sreality_id TEXT UNIQUE,
     
@@ -206,6 +220,13 @@ db.exec(`
     floor_max INTEGER,
     
     required_features TEXT,
+    
+    -- Nová flexibilní struktura
+    property_requirements TEXT,
+    common_filters TEXT,
+    locations TEXT,
+    valid_until DATETIME,
+    last_confirmed_at DATETIME,
     
     -- Provize a podmínky (nastavuje admin při schvalování)
     commission_rate REAL,
@@ -334,6 +355,10 @@ db.exec(`
     expires_at DATETIME,
     is_active INTEGER DEFAULT 1,
     signed_at DATETIME,
+    contract_text TEXT,
+    contract_hash TEXT,
+    ip_address TEXT,
+    verification_code TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -457,15 +482,29 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
-  -- Import Sources (Realitní kanceláře)
-  CREATE TABLE IF NOT EXISTS import_sources (
+  -- Emailove sablony
+  CREATE TABLE IF NOT EXISTS email_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_key TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
-    api_key TEXT NOT NULL UNIQUE,
-    contact_email TEXT,
-    contact_phone TEXT,
+    subject TEXT NOT NULL,
+    description TEXT,
+    html_content TEXT NOT NULL,
+    variables TEXT,
     is_active INTEGER DEFAULT 1,
-    rate_limit INTEGER DEFAULT 100,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Smluvni sablony (LOI, zprostredkovatelska smlouva, atd.)
+  CREATE TABLE IF NOT EXISTS contract_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    template_content TEXT NOT NULL,
+    variables TEXT,
+    is_active INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -473,7 +512,7 @@ db.exec(`
   -- Import Logs (Audit trail)
   CREATE TABLE IF NOT EXISTS import_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
     action TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id INTEGER,
@@ -485,26 +524,26 @@ db.exec(`
     user_agent TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
-    FOREIGN KEY (source_id) REFERENCES import_sources(id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
   -- Import Mappings (Mapování external_id -> internal_id)
   CREATE TABLE IF NOT EXISTS import_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
     external_id TEXT NOT NULL,
     internal_id INTEGER NOT NULL,
     entity_type TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
-    FOREIGN KEY (source_id) REFERENCES import_sources(id) ON DELETE CASCADE,
-    UNIQUE(source_id, external_id, entity_type)
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, external_id, entity_type)
   );
 
   -- Indexy pro rychlé vyhledávání
-  CREATE INDEX IF NOT EXISTS idx_import_logs_source ON import_logs(source_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_import_mappings_lookup ON import_mappings(source_id, external_id, entity_type);
+  CREATE INDEX IF NOT EXISTS idx_import_logs_user ON import_logs(user_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_import_mappings_lookup ON import_mappings(user_id, external_id, entity_type);
 `);
 
 // Vložení ukázkových dat
@@ -515,8 +554,9 @@ const insertCompany = db.prepare(`INSERT OR IGNORE INTO companies (
 const insertUser = db.prepare(`INSERT OR IGNORE INTO users (
   name, email, password, role, phone, phone_secondary, avatar,
   address_street, address_city, address_zip, address_country,
-  company_id, company_position, ico, dic, preferred_contact, notes
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  company_id, company_position, ico, dic, preferred_contact, notes,
+  api_key, rate_limit
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
 const insertProperty = db.prepare(`INSERT OR IGNORE INTO properties (
   title, description, transaction_type, property_type, property_subtype,
@@ -596,10 +636,12 @@ if (userCount.count === 0) {
     null, // ico
     null, // dic
     'email',
-    'Hlavní administrátor systému'
+    'Hlavní administrátor systému',
+    null, // api_key
+    null  // rate_limit
   );
   
-  // Agent 1 - Premium Reality
+  // Agent 1 - Premium Reality (s Import API)
   insertUser.run(
     'Jana Nováková',
     'jana.novakova@realitka.cz',
@@ -617,10 +659,12 @@ if (userCount.count === 0) {
     null,
     null,
     'phone',
-    'Specialista na luxusní byty v Praze. 10 let zkušeností.'
+    'Specialista na luxusní byty v Praze. 10 let zkušeností.',
+    'rk_premium_reality_api_key_123456789',
+    100
   );
   
-  // Agent 2 - City Realty
+  // Agent 2 - City Realty (s Import API)
   insertUser.run(
     'Petr Svoboda',
     'petr.svoboda@realitka.cz',
@@ -638,7 +682,9 @@ if (userCount.count === 0) {
     null,
     null,
     'phone',
-    'Zaměření na rodinné domy v Brně a okolí'
+    'Zaměření na rodinné domy v Brně a okolí',
+    'rk_city_realty_api_key_987654321',
+    50
   );
   
   // Klient 1 - Fyzická osoba
@@ -659,7 +705,9 @@ if (userCount.count === 0) {
     null,
     null,
     'email',
-    'Hledá byt 2+kk v Praze pro vlastní bydlení'
+    'Hledá byt 2+kk v Praze pro vlastní bydlení',
+    null,
+    null
   );
   
   // Klient 2 - Fyzická osoba
@@ -680,7 +728,9 @@ if (userCount.count === 0) {
     null,
     null,
     'phone',
-    'Hledá pronájem bytu v Brně'
+    'Hledá pronájem bytu v Brně',
+    null,
+    null
   );
   
   // Klient 3 - Firma (stavební společnost)
@@ -701,7 +751,9 @@ if (userCount.count === 0) {
     '11223344',
     'CZ11223344',
     'email',
-    'Hledá stavební pozemky pro výstavbu bytových domů'
+    'Hledá stavební pozemky pro výstavbu bytových domů',
+    null,
+    null
   );
   
   // Nemovitosti - Prodej bytů
@@ -829,12 +881,6 @@ if (userCount.count === 0) {
     null
   );
   
-  // Testovací import source
-  db.prepare(`
-    INSERT OR IGNORE INTO import_sources (id, name, api_key, contact_email, is_active, rate_limit)
-    VALUES (1, 'Test RK', 'test_api_key_123456789', 'test@rk.cz', 1, 100)
-  `).run();
-  
   console.log('Realitni databaze vytvorena');
   console.log('');
   console.log('Vytvoreny 3 spolecnosti');
@@ -849,8 +895,9 @@ if (userCount.count === 0) {
   console.log('Vytvoreno 7 nemovitosti');
   console.log('Vytvoreny 3 poptavky');
   console.log('');
-  console.log('Import API:');
-  console.log('   Test API Key: test_api_key_123456789');
+  console.log('Import API (Agenti s API pristupem):');
+  console.log('   Jana Novakova: rk_premium_reality_api_key_123456789 (rate limit: 100/hod)');
+  console.log('   Petr Svoboda: rk_city_realty_api_key_987654321 (rate limit: 50/hod)');
   console.log('   Import URL: http://localhost:3001/api/import');
 }
 

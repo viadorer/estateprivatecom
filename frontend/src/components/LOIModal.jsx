@@ -39,7 +39,7 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
 
   // Nahradit placeholdery v šabloně
   const renderContract = () => {
-    if (!contractTemplate) return ''
+    if (!contractTemplate || !contractTemplate.template_content) return ''
     
     let text = contractTemplate.template_content
     

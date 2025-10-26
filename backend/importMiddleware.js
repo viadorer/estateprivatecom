@@ -14,19 +14,19 @@ export const authenticateImportSource = (req, res, next) => {
     });
   }
   
-  const source = db.prepare(`
-    SELECT * FROM import_sources 
-    WHERE api_key = ? AND is_active = 1
+  const agent = db.prepare(`
+    SELECT * FROM users 
+    WHERE api_key = ? AND role = 'agent' AND is_active = 1
   `).get(apiKey);
   
-  if (!source) {
+  if (!agent) {
     return res.status(401).json({ 
       error: 'Neplatny API klic',
       message: 'API klic neni aktivni nebo neexistuje'
     });
   }
   
-  req.importSource = source;
+  req.importSource = agent;
   next();
 };
 

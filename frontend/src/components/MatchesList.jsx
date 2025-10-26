@@ -118,7 +118,9 @@ export default function MatchesList({ entityType, entityId, currentUser, onViewD
                         Lokality: {match.locations.map(l => l.name).join(', ')}
                       </div>
                     ) : match.cities ? (
-                      <div className="col-span-2">Lokace: {match.cities.join(', ')}</div>
+                      <div className="col-span-2">
+                        Lokace: {typeof match.cities === 'string' ? JSON.parse(match.cities).join(', ') : match.cities.join(', ')}
+                      </div>
                     ) : null}
                     
                     {match.matched_requirement && (

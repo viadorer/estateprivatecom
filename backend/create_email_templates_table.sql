@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS email_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  template_key TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  description TEXT,
+  html_content TEXT NOT NULL,
+  variables TEXT,
+  is_active INTEGER DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

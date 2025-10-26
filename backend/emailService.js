@@ -86,130 +86,134 @@ const sendEmailFromTemplate = async (templateKey, recipientEmail, variables, use
 
 // Odeslání přístupového kódu emailem
 const sendAccessCode = async (recipientEmail, recipientName, code, entityType, entityTitle, expiresAt) => {
-  const transporter = createTransporter();
+  // Import DEV_CONFIG
+  let DEV_CONFIG;
+  try {
+    DEV_CONFIG = (await import('./devConfig.js')).default;
+  } catch (e) {
+    DEV_CONFIG = { email: { sendEmails: true, showCodeInConsole: false } };
+  }
 
   const expirationText = expiresAt 
     ? `Kód je platný do: ${new Date(expiresAt).toLocaleString('cs-CZ')}`
     : 'Kód nemá omezenou platnost.';
 
-  const entityTypeText = entityType === 'property' ? 'nemovitosti' : 'poptávky';
+  // Určit typ entity a text podle entityType
+  let entityTypeText, emailSubject, emailHeading, emailDescription;
+  
+  if (entityType === 'agent_declaration') {
+    entityTypeText = 'Prohlášení agenta';
+    emailSubject = 'Ověřovací kód pro vytvoření nabídky';
+    emailHeading = 'Ověřovací kód';
+    emailDescription = 'Byl vám vygenerován ověřovací kód pro potvrzení Prohlášení agenta a vytvoření nové nabídky nemovitosti.';
+  } else if (entityType === 'property') {
+    entityTypeText = 'nemovitosti';
+    emailSubject = 'Přístupový kód k nemovitosti';
+    emailHeading = 'Přístupový kód';
+    emailDescription = 'Byl vám vygenerován přístupový kód pro zobrazení detailu nemovitosti:';
+  } else {
+    entityTypeText = 'poptávky';
+    emailSubject = 'Přístupový kód k poptávce';
+    emailHeading = 'Přístupový kód';
+    emailDescription = 'Byl vám vygenerován přístupový kód pro zobrazení detailu poptávky:';
+  }
+  
+  // V dev režimu zobrazit kód v konzoli
+  if (DEV_CONFIG.email.showCodeInConsole) {
+    console.log('\n=== PRISTUPOVY KOD ===');
+    console.log(`Email: ${recipientEmail}`);
+    console.log(`Jmeno: ${recipientName}`);
+    console.log(`KOD: ${code}`);
+    console.log(`Typ: ${entityTypeText}`);
+    console.log(`Expirace: ${expirationText}`);
+    console.log('======================\n');
+  }
+  
+  // Pokud je vypnuto odesílání emailů, jen logovat
+  if (!DEV_CONFIG.email.sendEmails) {
+    console.log(`[DEV] Email by byl odeslan na ${recipientEmail} s kodem: ${code}`);
+    return { success: true, messageId: 'dev-mode-no-email' };
+  }
+
+  const transporter = createTransporter();
 
   const mailOptions = {
     from: {
-      name: 'Estateprivate.com',
+      name: 'Estate Private',
       address: process.env.EMAIL_USER || 'info@ptf.cz'
     },
     to: recipientEmail,
-    subject: `🔐 Přístupový kód k ${entityTypeText}`,
+    subject: emailSubject,
     html: `
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="utf-8">
         <style>
-          body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-            border-radius: 10px 10px 0 0;
-          }
-          .content {
-            background: #f9fafb;
-            padding: 30px;
-            border-radius: 0 0 10px 10px;
-          }
-          .code-box {
-            background: white;
-            border: 3px dashed #667eea;
-            padding: 20px;
-            text-align: center;
-            margin: 20px 0;
-            border-radius: 8px;
-          }
-          .code {
-            font-size: 32px;
-            font-weight: bold;
-            letter-spacing: 8px;
-            color: #667eea;
-            font-family: 'Courier New', monospace;
-          }
-          .info-box {
-            background: #eff6ff;
-            border-left: 4px solid #3b82f6;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 4px;
-          }
-          .footer {
-            text-align: center;
-            color: #6b7280;
-            font-size: 12px;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #e5e7eb;
-          }
-          .button {
-            display: inline-block;
-            background: #667eea;
-            color: white;
-            padding: 12px 30px;
-            text-decoration: none;
-            border-radius: 6px;
-            margin: 20px 0;
-          }
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #111827; margin: 0; padding: 0; background: #f9fafb; }
+          .container { max-width: 600px; margin: 40px auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; }
+          .header h1 { color: white; margin: 0; font-size: 28px; font-weight: 600; }
+          .content { padding: 40px 30px; }
+          .content h2 { color: #111827; font-size: 20px; margin: 0 0 20px 0; }
+          .content p { color: #4b5563; margin: 0 0 15px 0; }
+          .code-box { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; text-align: center; margin: 25px 0; }
+          .code { font-size: 32px; font-weight: 700; color: #3182ce; letter-spacing: 4px; font-family: 'Courier New', monospace; }
+          .info-box { background: #fef3c7; border: 1px solid #fde68a; border-radius: 8px; padding: 15px; margin: 20px 0; }
+          .footer { background: #f9fafb; padding: 30px; text-align: center; color: #6b7280; font-size: 14px; }
         </style>
       </head>
       <body>
-        <div class="header">
-          <h1>🏠 Přístupový kód k ${entityTypeText}</h1>
-        </div>
-        
-        <div class="content">
-          <p>Dobrý den, <strong>${recipientName}</strong>,</p>
-          
-          <p>byl Vám vygenerován přístupový kód pro zobrazení detailu ${entityTypeText}:</p>
-          
-          <p><strong>${entityTitle}</strong></p>
-          
-          <div class="code-box">
-            <div class="code">${code}</div>
+        <div class="container">
+          <div class="header">
+            <h1>Estate Private</h1>
           </div>
-          
-          <div class="info-box">
-            <p style="margin: 0;"><strong>ℹ️ Jak použít kód:</strong></p>
-            <ol style="margin: 10px 0;">
-              <li>Přihlaste se do realitního systému</li>
-              <li>Najděte požadovanou ${entityTypeText}</li>
-              <li>Klikněte na "Zobrazit detail"</li>
-              <li>Zadejte tento kód</li>
-            </ol>
+          <div class="content">
+            <h2>${emailHeading}</h2>
+            <p>Dobrý den, <strong>${recipientName}</strong>,</p>
+            <p>${emailDescription}</p>
+            ${entityTitle && entityType !== 'agent_declaration' ? `<p style="font-size: 16px; font-weight: 600; color: #111827; margin: 20px 0;">${entityTitle}</p>` : ''}
+            
+            <div class="code-box">
+              <p style="margin: 0 0 10px 0; color: #6b7280; font-size: 14px;">Váš kód:</p>
+              <div class="code">${code}</div>
+            </div>
+            
+            ${entityType === 'agent_declaration' ? `
+            <div class="info-box">
+              <p style="margin: 0 0 10px 0; color: #92400e; font-weight: 600;">Jak použít kód:</p>
+              <ol style="margin: 0; padding-left: 20px; color: #92400e;">
+                <li>Vraťte se do formuláře Prohlášení agenta</li>
+                <li>Zadejte tento 6-místný kód</li>
+                <li>Po ověření můžete pokračovat ve vytváření nabídky</li>
+              </ol>
+            </div>
+            ` : `
+            <div class="info-box">
+              <p style="margin: 0 0 10px 0; color: #92400e; font-weight: 600;">Jak použít kód:</p>
+              <ol style="margin: 0; padding-left: 20px; color: #92400e;">
+                <li>Přihlaste se do systému Estate Private</li>
+                <li>Najděte požadovanou ${entityTypeText}</li>
+                <li>Klikněte na "Zobrazit detail"</li>
+                <li>Zadejte tento kód</li>
+              </ol>
+            </div>
+            `}
+            
+            <p style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+              <strong>Platnost:</strong> ${expirationText}
+            </p>
+            
+            <p style="color: #6b7280; font-size: 14px; border-left: 3px solid #e5e7eb; padding-left: 15px;">
+              <strong>Bezpečnost:</strong> Tento kód je určen pouze pro vás. Nesdílejte ho s nikým dalším. Každé použití kódu je zaznamenáno.
+            </p>
+            
+            <p>S pozdravem,<br><strong>Tým Estate Private</strong></p>
           </div>
-          
-          <p><strong>⏰ Platnost:</strong> ${expirationText}</p>
-          
-          <p style="color: #6b7280; font-size: 14px;">
-            <strong>🔒 Bezpečnost:</strong> Tento kód je určen pouze pro Vás. 
-            Nesdílejte ho s nikým dalším. Každé použití kódu je zaznamenáno.
-          </p>
-          
-          <p>Pokud máte jakékoliv dotazy, neváhejte nás kontaktovat.</p>
-          
-          <p>S pozdravem,<br>
-          <strong>Tým Estate Private</strong></p>
-        </div>
-        
-        <div class="footer">
-          <p>Tento email byl odeslán automaticky. Prosím neodpovídejte na něj.</p>
-          <p>&copy; ${new Date().getFullYear()} Realitní systém. Všechna práva vyhrazena.</p>
+          <div class="footer">
+            <p>Estate Private - Realitní platforma</p>
+            <p>Tento email byl odeslán automaticky, neodpovídejte na něj.</p>
+          </div>
         </div>
       </body>
       </html>

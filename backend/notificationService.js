@@ -1,4 +1,4 @@
-import { sendAccessCode } from './emailService.js';
+import { sendAccessCode, sendEmailFromTemplate } from './emailService.js';
 import db from './database.js';
 
 // Vytvoření notifikace v databázi
@@ -414,6 +414,160 @@ const notifyAgentContractRequired = async (entityId, userId, commissionRate, com
   );
 };
 
+// Odeslani notifikaci o nove nabidce klientum s odpovida jicimi poptavkami
+const notifyClientsAboutNewProperty = async (propertyId) => {
+  try {
+    const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propertyId);
+    if (!property) return { success: false, error: 'Property not found' };
+
+    // Najit vsechny aktivni poptavky, ktere odpovida ji
+    const matches = db.prepare(`
+      SELECT DISTINCT d.client_id, d.id as demand_id, u.email, u.name, u.notify_new_properties, u.min_match_score
+      FROM demands d
+      JOIN users u ON d.client_id = u.id
+      WHERE d.status = 'active'
+        AND d.transaction_type = ?
+        AND d.property_type = ?
+        AND u.notify_new_properties = 1
+        AND u.is_active = 1
+    `).all(property.transaction_type, property.property_type);
+
+    let sentCount = 0;
+    
+    for (const match of matches) {
+      // Vypocitat match score (zjednodusena verze)
+      let matchScore = 70; // Zakladni shoda typu a transakce
+      
+      // Kontrola ceny
+      if (match.price_min && match.price_max) {
+        if (property.price >= match.price_min && property.price <= match.price_max) {
+          matchScore += 15;
+        }
+      }
+      
+      // Kontrola plochy
+      if (match.area_min && match.area_max) {
+        if (property.area >= match.area_min && property.area <= match.area_max) {
+          matchScore += 15;
+        }
+      }
+      
+      // Pokud je match score nizsi nez minimum uzivatele, preskocit
+      if (matchScore < (match.min_match_score || 70)) {
+        continue;
+      }
+      
+      // Vygenerovat pristupovy kod
+      const accessCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dni
+      
+      db.prepare(`
+        INSERT INTO access_codes (user_id, entity_type, entity_id, code, expires_at)
+        VALUES (?, 'property', ?, ?, ?)
+      `).run(match.client_id, propertyId, accessCode, expiresAt.toISOString());
+      
+      // Odeslat email
+      try {
+        await sendEmailFromTemplate('new_property_match', match.email, {
+          recipientName: match.name,
+          propertyTitle: property.title,
+          propertyLocation: `${property.city}${property.district ? ', ' + property.district : ''}`,
+          propertyPrice: new Intl.NumberFormat('cs-CZ').format(property.price) + ' Kc',
+          propertyArea: property.area,
+          propertyType: property.property_type,
+          matchScore: matchScore,
+          accessCode: accessCode
+        }, match.client_id);
+        
+        sentCount++;
+      } catch (error) {
+        console.error(`Chyba pri odesilani emailu klientovi ${match.client_id}:`, error);
+      }
+    }
+    
+    return { success: true, sentCount };
+  } catch (error) {
+    console.error('Chyba pri notifikovani klientu o nove nabidce:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Odeslani notifikaci o nove poptavce agentum s odpovida jicimi nabidkami
+const notifyAgentsAboutNewDemand = async (demandId) => {
+  try {
+    const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(demandId);
+    if (!demand) return { success: false, error: 'Demand not found' };
+    
+    const client = db.prepare('SELECT name, email, phone FROM users WHERE id = ?').get(demand.client_id);
+
+    // Najit vsechny aktivni nabidky, ktere odpovida ji
+    const matches = db.prepare(`
+      SELECT DISTINCT p.id as property_id, p.agent_id, p.title, u.email, u.name, u.notify_new_demands, u.min_match_score
+      FROM properties p
+      JOIN users u ON p.agent_id = u.id
+      WHERE p.status = 'active'
+        AND p.transaction_type = ?
+        AND p.property_type = ?
+        AND u.notify_new_demands = 1
+        AND u.is_active = 1
+    `).all(demand.transaction_type, demand.property_type);
+
+    let sentCount = 0;
+    
+    for (const match of matches) {
+      // Vypocitat match score
+      let matchScore = 70;
+      
+      const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(match.property_id);
+      
+      if (demand.price_min && demand.price_max && property) {
+        if (property.price >= demand.price_min && property.price <= demand.price_max) {
+          matchScore += 15;
+        }
+      }
+      
+      if (demand.area_min && demand.area_max && property) {
+        if (property.area >= demand.area_min && property.area <= demand.area_max) {
+          matchScore += 15;
+        }
+      }
+      
+      if (matchScore < (match.min_match_score || 70)) {
+        continue;
+      }
+      
+      // Odeslat email
+      try {
+        const cities = demand.cities ? JSON.parse(demand.cities) : [];
+        const priceRange = `${new Intl.NumberFormat('cs-CZ').format(demand.price_min || 0)} - ${new Intl.NumberFormat('cs-CZ').format(demand.price_max || 0)} Kc`;
+        const areaRange = `${demand.area_min || 0} - ${demand.area_max || 0}`;
+        
+        await sendEmailFromTemplate('new_demand_match', match.email, {
+          recipientName: match.name,
+          propertyTitle: match.title,
+          demandType: demand.property_type,
+          demandPriceRange: priceRange,
+          demandAreaRange: areaRange,
+          demandLocations: cities.join(', '),
+          matchScore: matchScore,
+          clientName: client.name,
+          clientEmail: client.email,
+          clientPhone: client.phone || 'Neuvedeno'
+        }, match.agent_id);
+        
+        sentCount++;
+      } catch (error) {
+        console.error(`Chyba pri odesilani emailu agentovi ${match.agent_id}:`, error);
+      }
+    }
+    
+    return { success: true, sentCount };
+  } catch (error) {
+    console.error('Chyba pri notifikovani agentu o nove poptavce:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 export {
   createNotification,
   sendNotificationWithEmail,
@@ -422,5 +576,7 @@ export {
   notifyDemandApproved,
   notifyDemandRejected,
   notifyNewMatch,
-  notifyAgentContractRequired
+  notifyAgentContractRequired,
+  notifyClientsAboutNewProperty,
+  notifyAgentsAboutNewDemand
 };
