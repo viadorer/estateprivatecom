@@ -456,6 +456,55 @@ db.exec(`
     
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  -- Import Sources (Realitní kanceláře)
+  CREATE TABLE IF NOT EXISTS import_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    api_key TEXT NOT NULL UNIQUE,
+    contact_email TEXT,
+    contact_phone TEXT,
+    is_active INTEGER DEFAULT 1,
+    rate_limit INTEGER DEFAULT 100,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Import Logs (Audit trail)
+  CREATE TABLE IF NOT EXISTS import_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER,
+    external_id TEXT,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    request_data TEXT,
+    ip_address TEXT,
+    user_agent TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (source_id) REFERENCES import_sources(id) ON DELETE CASCADE
+  );
+
+  -- Import Mappings (Mapování external_id -> internal_id)
+  CREATE TABLE IF NOT EXISTS import_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL,
+    external_id TEXT NOT NULL,
+    internal_id INTEGER NOT NULL,
+    entity_type TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (source_id) REFERENCES import_sources(id) ON DELETE CASCADE,
+    UNIQUE(source_id, external_id, entity_type)
+  );
+
+  -- Indexy pro rychlé vyhledávání
+  CREATE INDEX IF NOT EXISTS idx_import_logs_source ON import_logs(source_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_import_mappings_lookup ON import_mappings(source_id, external_id, entity_type);
 `);
 
 // Vložení ukázkových dat
@@ -780,25 +829,29 @@ if (userCount.count === 0) {
     null
   );
   
-  console.log('✅ Realitní databáze vytvořena');
+  // Testovací import source
+  db.prepare(`
+    INSERT OR IGNORE INTO import_sources (id, name, api_key, contact_email, is_active, rate_limit)
+    VALUES (1, 'Test RK', 'test_api_key_123456789', 'test@rk.cz', 1, 100)
+  `).run();
+  
+  console.log('Realitni databaze vytvorena');
   console.log('');
-  console.log('🏢 Vytvořeny 3 společnosti');
-  console.log('👥 Vytvořeno 6 uživatelů:');
-  console.log('   👑 Admin: admin@realitka.cz / heslo123');
-  console.log('   🏢 Agent: jana.novakova@realitka.cz / heslo123 (Premium Reality)');
-  console.log('   🏢 Agent: petr.svoboda@realitka.cz / heslo123 (City Realty)');
-  console.log('   👤 Klient: martin.dvorak@email.cz / heslo123 (fyzická osoba)');
-  console.log('   👤 Klient: lucie.cerna@email.cz / heslo123 (fyzická osoba)');
-  console.log('   👤 Klient: novotny@alfa-stavby.cz / heslo123 (firma ALFA)');
+  console.log('Vytvoreny 3 spolecnosti');
+  console.log('Vytvoreno 6 uzivatelu:');
+  console.log('   Admin: admin@realitka.cz / heslo123');
+  console.log('   Agent: jana.novakova@realitka.cz / heslo123 (Premium Reality)');
+  console.log('   Agent: petr.svoboda@realitka.cz / heslo123 (City Realty)');
+  console.log('   Klient: martin.dvorak@email.cz / heslo123 (fyzicka osoba)');
+  console.log('   Klient: lucie.cerna@email.cz / heslo123 (fyzicka osoba)');
+  console.log('   Klient: novotny@alfa-stavby.cz / heslo123 (firma ALFA)');
   console.log('');
-  console.log('🏠 Vytvořeno 7 nemovitostí');
-  console.log('🔍 Vytvořeny 3 poptávky');
+  console.log('Vytvoreno 7 nemovitosti');
+  console.log('Vytvoreny 3 poptavky');
   console.log('');
-  console.log('📊 Struktura:');
-  console.log('   - Každý uživatel má kompletní údaje (jméno, email, telefon, adresa)');
-  console.log('   - Agenti jsou napojeni na společnosti');
-  console.log('   - Klienti mají vyplněné preference a poznámky');
-  console.log('   - Poptávky jsou připraveny pro automatické párování');
+  console.log('Import API:');
+  console.log('   Test API Key: test_api_key_123456789');
+  console.log('   Import URL: http://localhost:3001/api/import');
 }
 
 console.log('✅ Databáze inicializována');

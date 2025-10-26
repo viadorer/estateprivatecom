@@ -22,6 +22,17 @@ import {
   notifyAgentContractRequired,
   notifyNewMatch 
 } from './notificationService.js';
+import { 
+  authenticateImportSource, 
+  importRateLimiter, 
+  logImportRequest 
+} from './importMiddleware.js';
+import { 
+  importProperty, 
+  deleteImportedProperty, 
+  listImportedProperties,
+  getImportStats
+} from './importController.js';
 
 dotenv.config();
 
@@ -4645,6 +4656,38 @@ app.put('/api/email-templates/:id', (req, res) => {
 // START SERVER
 // ============================================
 
+// ==================== IMPORT API ====================
+
+// Import API routes
+app.post('/api/import/properties', 
+  authenticateImportSource, 
+  importRateLimiter,
+  logImportRequest,
+  importProperty
+);
+
+app.delete('/api/import/properties/:external_id', 
+  authenticateImportSource, 
+  importRateLimiter,
+  logImportRequest,
+  deleteImportedProperty
+);
+
+app.get('/api/import/properties', 
+  authenticateImportSource, 
+  logImportRequest,
+  listImportedProperties
+);
+
+app.get('/api/import/stats', 
+  authenticateImportSource, 
+  logImportRequest,
+  getImportStats
+);
+
+// ==================== SERVER START ====================
+
 app.listen(PORT, () => {
-  console.log(`[SERVER] Realitní API běží na http://localhost:${PORT}`)
+  console.log(`[SERVER] Realitní API běží na http://localhost:${PORT}`);
+  console.log(`[IMPORT] Import API: http://localhost:${PORT}/api/import`);
 });
