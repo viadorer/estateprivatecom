@@ -4685,9 +4685,266 @@ app.get('/api/import/stats',
   getImportStats
 );
 
+// ==================== ADMIN - IMPORT SOURCES ====================
+
+// Ziskat vsechny import sources (pouze admin)
+app.get('/api/admin/import-sources', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    const sources = db.prepare(`
+      SELECT 
+        s.*,
+        COUNT(DISTINCT l.id) as total_imports,
+        SUM(CASE WHEN l.status = 'success' THEN 1 ELSE 0 END) as successful_imports,
+        MAX(l.created_at) as last_import
+      FROM import_sources s
+      LEFT JOIN import_logs l ON s.id = l.source_id
+      GROUP BY s.id
+      ORDER BY s.created_at DESC
+    `).all();
+    
+    res.json({ success: true, sources });
+  } catch (error) {
+    console.error('Chyba pri nacteni import sources:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ziskat jeden import source (pouze admin)
+app.get('/api/admin/import-sources/:id', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Import source nenalezen' });
+    }
+    
+    // Statistiky
+    const stats = db.prepare(`
+      SELECT 
+        COUNT(*) as total_imports,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed,
+        MAX(created_at) as last_import
+      FROM import_logs
+      WHERE source_id = ?
+    `).get(id);
+    
+    // Posledni importy
+    const recentImports = db.prepare(`
+      SELECT * FROM import_logs
+      WHERE source_id = ?
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).all(id);
+    
+    res.json({ 
+      success: true, 
+      source,
+      stats,
+      recent_imports: recentImports
+    });
+  } catch (error) {
+    console.error('Chyba pri nacteni import source:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Vytvorit novy import source (pouze admin)
+app.post('/api/admin/import-sources', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    const { name, contact_email, contact_phone, rate_limit } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Nazev je povinny' });
+    }
+    
+    // Vygenerovat API klic
+    const apiKey = 'rk_' + crypto.randomBytes(32).toString('hex');
+    
+    const result = db.prepare(`
+      INSERT INTO import_sources (name, api_key, contact_email, contact_phone, rate_limit)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(name, apiKey, contact_email || null, contact_phone || null, rate_limit || 100);
+    
+    const newSource = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(result.lastInsertRowid);
+    
+    // Log akce
+    logAction(req.user.userId, 'create', 'import_source', result.lastInsertRowid, `Vytvoren import source: ${name}`, req);
+    
+    res.json({ 
+      success: true, 
+      source: newSource,
+      message: 'Import source vytvoren'
+    });
+  } catch (error) {
+    console.error('Chyba pri vytvareni import source:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Aktualizovat import source (pouze admin)
+app.put('/api/admin/import-sources/:id', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, contact_email, contact_phone, rate_limit, is_active } = req.body;
+    
+    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Import source nenalezen' });
+    }
+    
+    db.prepare(`
+      UPDATE import_sources 
+      SET name = ?, contact_email = ?, contact_phone = ?, rate_limit = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      name || source.name,
+      contact_email !== undefined ? contact_email : source.contact_email,
+      contact_phone !== undefined ? contact_phone : source.contact_phone,
+      rate_limit !== undefined ? rate_limit : source.rate_limit,
+      is_active !== undefined ? is_active : source.is_active,
+      id
+    );
+    
+    const updatedSource = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    
+    // Log akce
+    logAction(req.user.userId, 'update', 'import_source', id, `Aktualizovan import source: ${updatedSource.name}`, req);
+    
+    res.json({ 
+      success: true, 
+      source: updatedSource,
+      message: 'Import source aktualizovan'
+    });
+  } catch (error) {
+    console.error('Chyba pri aktualizaci import source:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Regenerovat API klic (pouze admin)
+app.post('/api/admin/import-sources/:id/regenerate-key', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Import source nenalezen' });
+    }
+    
+    // Vygenerovat novy API klic
+    const newApiKey = 'rk_' + crypto.randomBytes(32).toString('hex');
+    
+    db.prepare(`
+      UPDATE import_sources 
+      SET api_key = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(newApiKey, id);
+    
+    const updatedSource = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    
+    // Log akce
+    logAction(req.user.userId, 'regenerate_key', 'import_source', id, `Regenerovan API klic pro: ${source.name}`, req);
+    
+    res.json({ 
+      success: true, 
+      source: updatedSource,
+      message: 'API klic regenerovan'
+    });
+  } catch (error) {
+    console.error('Chyba pri regeneraci API klice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Smazat import source (pouze admin)
+app.delete('/api/admin/import-sources/:id', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const source = db.prepare('SELECT * FROM import_sources WHERE id = ?').get(id);
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Import source nenalezen' });
+    }
+    
+    // Smazat import source (cascade smaze i logy a mappingy)
+    db.prepare('DELETE FROM import_sources WHERE id = ?').run(id);
+    
+    // Log akce
+    logAction(req.user.userId, 'delete', 'import_source', id, `Smazan import source: ${source.name}`, req);
+    
+    res.json({ 
+      success: true,
+      message: 'Import source smazan'
+    });
+  } catch (error) {
+    console.error('Chyba pri mazani import source:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Celkove statistiky importu (pouze admin)
+app.get('/api/admin/import-stats', authenticateToken, requireRole('admin'), (req, res) => {
+  try {
+    // Celkove statistiky
+    const totalStats = db.prepare(`
+      SELECT 
+        COUNT(DISTINCT source_id) as total_sources,
+        COUNT(*) as total_imports,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed,
+        COUNT(DISTINCT DATE(created_at)) as active_days
+      FROM import_logs
+    `).get();
+    
+    // Statistiky za poslednich 30 dni
+    const recentStats = db.prepare(`
+      SELECT 
+        DATE(created_at) as date,
+        COUNT(*) as imports,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed
+      FROM import_logs
+      WHERE created_at >= datetime('now', '-30 days')
+      GROUP BY DATE(created_at)
+      ORDER BY date DESC
+    `).all();
+    
+    // Top RK
+    const topSources = db.prepare(`
+      SELECT 
+        s.id,
+        s.name,
+        COUNT(*) as imports,
+        SUM(CASE WHEN l.status = 'success' THEN 1 ELSE 0 END) as successful,
+        MAX(l.created_at) as last_import
+      FROM import_logs l
+      JOIN import_sources s ON l.source_id = s.id
+      GROUP BY s.id
+      ORDER BY imports DESC
+      LIMIT 10
+    `).all();
+    
+    res.json({
+      success: true,
+      total_stats: totalStats,
+      recent_stats: recentStats,
+      top_sources: topSources
+    });
+  } catch (error) {
+    console.error('Chyba pri nacteni statistik:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== SERVER START ====================
 
 app.listen(PORT, () => {
-  console.log(`[SERVER] Realitní API běží na http://localhost:${PORT}`);
+  console.log(`[SERVER] Realitni API bezi na http://localhost:${PORT}`);
   console.log(`[IMPORT] Import API: http://localhost:${PORT}/api/import`);
 });

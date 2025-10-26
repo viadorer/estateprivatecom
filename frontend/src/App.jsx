@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
+import './App.css'
+import AdminImportSources from './components/AdminImportSources'
 import { Building2, Home, Search, Users as UsersIcon, LogOut, Building, Heart, Calendar, Edit, Pause, Play, Grid, List, Clock, User, FileText, Image as ImageIcon, Upload, X, Check, AlertCircle, Mail, Map, Plus, Trash2, MapPin, Lock } from 'lucide-react'
 import { LABELS_CS } from './constants'
 import GDPRBanner from './components/GDPRBanner'
@@ -603,6 +605,18 @@ function App() {
                     <Mail className="w-5 h-5" />
                     <span className="font-medium text-sm">Emaily</span>
                   </button>
+                  
+                  <button
+                    onClick={() => { setActiveTab('import-sources'); setMobileMenuOpen(false); }}
+                    className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl transition-all ${
+                      activeTab === 'import-sources' 
+                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
+                        : 'hover:bg-white/50'
+                    }`}
+                  >
+                    <Upload className="w-5 h-5" />
+                    <span className="font-medium text-sm">Import API</span>
+                  </button>
                 </>
               )}
               
@@ -771,6 +785,12 @@ function App() {
                   }
                 }}
               />
+            )}
+            {activeTab === 'import-sources' && currentUser.role === 'admin' && (
+              <div className="fade-in">
+                <h1 className="text-4xl font-bold text-white mb-8">Import Sources</h1>
+                <AdminImportSources currentUser={currentUser} />
+              </div>
             )}
             {activeTab === 'documents' && (
               <div className="fade-in">
