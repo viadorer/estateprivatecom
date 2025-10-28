@@ -1203,7 +1203,7 @@ app.put('/api/users/:id', async (req, res) => {
     `;
     
     let params = [
-      name, email, role, phone, phone_secondary, avatar,
+      name, effectiveEmail, role, phone, phone_secondary, avatar,
       address_street, address_city, address_zip, address_country,
       company_id || null, company_position, ico, dic,
       preferred_contact, newsletter_subscribed, notes, is_active
@@ -1221,7 +1221,8 @@ app.put('/api/users/:id', async (req, res) => {
     db.prepare(updateQuery).run(...params);
     
     // Logování
-    logAction(1, 'update', 'user', req.params.id, `Upraven uživatel: ${email}`, req);
+    const actorId = currentUser?.userId || 1;
+    logAction(actorId, 'update', 'user', req.params.id, `Upraven uživatel: ${effectiveEmail}`, req);
     
     res.json({ success: true });
   } catch (error) {
@@ -4420,6 +4421,35 @@ app.put('/api/contract-templates/:id', (req, res) => {
     res.json(updated)
   } catch (error) {
     console.error('Chyba při aktualizaci šablony:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Získat odeslané emaily (admin)
+app.get('/api/sent-emails', (req, res) => {
+  try {
+    const emails = db.prepare(`
+      SELECT 
+        se.*,
+        u.name as user_name,
+        u.email as user_email,
+        p.title as property_title,
+        d.title as demand_title,
+        CASE 
+          WHEN p.id IS NOT NULL THEN p.title
+          WHEN d.id IS NOT NULL THEN d.title
+          ELSE NULL
+        END as entity_title
+      FROM sent_emails se
+      LEFT JOIN users u ON se.user_id = u.id
+      LEFT JOIN properties p ON se.entity_id = p.id AND se.entity_type = 'property'
+      LEFT JOIN demands d ON se.entity_id = d.id AND se.entity_type = 'demand'
+      ORDER BY se.sent_at DESC
+    `).all()
+    
+    res.json(emails)
+  } catch (error) {
+    console.error('Chyba při načítání odeslaných emailů:', error)
     res.status(500).json({ error: error.message })
   }
 })

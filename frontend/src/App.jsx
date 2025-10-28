@@ -21,6 +21,7 @@ import PropertiesMap from './components/PropertiesMap'
 import PropertyCard from './components/PropertyCard'
 
 const API_URL = 'http://localhost:3001/api'
+const MAPY_API_KEY = 'MTIdGpXVtxteHwipIwRw1MyH8f4IWYNgTyppp75Vp54'
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
@@ -444,7 +445,7 @@ function App() {
                   
                   {/* User info - skryté na mobilu */}
                   <button
-                    onClick={() => setShowUserDetail(currentUser)}
+                    onClick={() => { setSelectedUser(currentUser); setShowUserDetail(true); }}
                     className="hidden md:flex glass-card py-2 px-4 items-center space-x-3 hover:bg-white/50 transition cursor-pointer"
                   >
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
@@ -637,7 +638,10 @@ function App() {
               )}
               
               <div className="pt-3 mt-3 border-t border-gray-200">
-                <div className="flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-white/30 transition cursor-pointer" onClick={() => setShowUserDetail(currentUser)}>
+                <div
+                  className="flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-white/30 transition cursor-pointer"
+                  onClick={() => { setSelectedUser(currentUser); setShowUserDetail(true); }}
+                >
                   <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center shadow-lg">
                     <User className="w-6 h-6 text-white" />
                   </div>
@@ -1362,14 +1366,56 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
       setLocationSuggestions([])
       return
     }
-    
-    // Získat unikátní města z nemovitostí
-    const uniqueCities = [...new Set(properties.map(p => p.city).filter(Boolean))]
-    const matches = uniqueCities
-      .filter(city => city.toLowerCase().includes(query.toLowerCase()))
-      .slice(0, 5)
-    
-    setLocationSuggestions(matches)
+
+    try {
+      const response = await fetch(
+        `https://api.mapy.cz/v1/suggest?lang=cs&limit=8&locality=cz&type=regional&query=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            Accept: 'application/json',
+            'X-Mapy-Api-Key': MAPY_API_KEY
+          }
+        }
+      )
+
+      if (!response.ok) throw new Error('Sugest API error')
+      const data = await response.json()
+
+      const suggestions = (data.items || []).map(item => {
+        const normalizedBbox = Array.isArray(item.bbox) && item.bbox.length === 4
+          ? {
+              minLon: Number(item.bbox[0]),
+              minLat: Number(item.bbox[1]),
+              maxLon: Number(item.bbox[2]),
+              maxLat: Number(item.bbox[3])
+            }
+          : null
+
+        const municipality = item.regionalStructure?.find(r => r.type === 'regional.municipality')?.name
+        const district = item.regionalStructure?.find(r => r.type === 'regional.region' && r.name.startsWith('okres'))?.name?.replace('okres ', '')
+        const region = item.regionalStructure?.find(r => r.type === 'regional.region' && r.name.startsWith('kraj'))?.name?.replace('kraj ', '')
+        const labelParts = [item.name]
+        if (municipality && municipality !== item.name) labelParts.push(municipality)
+        if (district) labelParts.push(district)
+        if (region) labelParts.push(region)
+
+        return {
+          label: labelParts.join(', '),
+          name: item.name,
+          city: municipality,
+          district,
+          region,
+          latitude: item.location?.lat || item.position?.lat || null,
+          longitude: item.location?.lon || item.position?.lon || null,
+          bbox: normalizedBbox
+        }
+      })
+
+      setLocationSuggestions(suggestions)
+    } catch (error) {
+      console.error('Chyba při našeptávání lokality:', error)
+      setLocationSuggestions([])
+    }
   }
 
   const filteredProperties = Array.isArray(properties) ? properties.filter(property => {
@@ -1381,8 +1427,20 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
     if (filters.price_max && property.price > parseInt(filters.price_max)) return false
     
     // Filtrování podle lokality - textové vyhledávání
-    if (filters.location_search && property.city) {
-      if (!property.city.toLowerCase().includes(filters.location_search.toLowerCase())) return false
+    if (filters.location_search) {
+      if (selectedLocation?.bbox && property.latitude && property.longitude) {
+        const { minLat, maxLat, minLon, maxLon } = selectedLocation.bbox
+        const lat = Number(property.latitude)
+        const lon = Number(property.longitude)
+        if (
+          Number.isFinite(lat) && Number.isFinite(lon) &&
+          (lat < minLat || lat > maxLat || lon < minLon || lon > maxLon)
+        ) {
+          return false
+        }
+      } else if (property.city) {
+        if (!property.city.toLowerCase().includes(filters.location_search.toLowerCase())) return false
+      }
     }
     
     // Filtr "Moje nabídky"
@@ -1445,7 +1503,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
           )}
           
           <button
-            onClick={() => setFilters({ ...filters, transaction_type: '' })}
+            onClick={() => setFilters({ ...filters, transaction_type: '', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.transaction_type === '' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1478,7 +1536,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
           <div className="h-6 w-px bg-gray-300 mx-2"></div>
           
           <button
-            onClick={() => setFilters({ ...filters, property_type: '' })}
+            onClick={() => setFilters({ ...filters, property_type: '', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === '' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1488,7 +1546,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             Všechny typy
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'flat' })}
+            onClick={() => setFilters({ ...filters, property_type: 'flat', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'flat' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1498,7 +1556,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             Byty
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'house' })}
+            onClick={() => setFilters({ ...filters, property_type: 'house', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'house' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1508,7 +1566,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             Domy
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'commercial' })}
+            onClick={() => setFilters({ ...filters, property_type: 'commercial', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'commercial' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1518,7 +1576,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             Komerční
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'land' })}
+            onClick={() => setFilters({ ...filters, property_type: 'land', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'land' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1528,7 +1586,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             Pozemky
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'project' })}
+            onClick={() => setFilters({ ...filters, property_type: 'project', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'project' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -1630,25 +1688,42 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
                 placeholder="Lokalita (město, vesnice)"
                 value={filters.location_search}
                 onChange={(e) => {
-                  setFilters({ ...filters, location_search: e.target.value })
-                  searchLocations(e.target.value)
+                  const value = e.target.value
+                  setFilters({ ...filters, location_search: value })
+                  if (!value) {
+                    setSelectedLocation(null)
+                    setLocationSuggestions([])
+                    return
+                  }
+                  if (selectedLocation && selectedLocation.label !== value) {
+                    setSelectedLocation(null)
+                  }
+                  searchLocations(value)
                 }}
-                onFocus={() => filters.location_search && searchLocations(filters.location_search)}
+                onFocus={() => filters.location_search && filters.location_search.length >= 2 && searchLocations(filters.location_search)}
                 className="glass-input w-full"
               />
               {locationSuggestions.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 glass-card max-h-60 overflow-y-auto">
-                  {locationSuggestions.map((city, index) => (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
+                  {locationSuggestions.map((suggestion, index) => (
                     <button
                       key={index}
                       type="button"
                       onClick={() => {
-                        setFilters({ ...filters, location_search: city })
+                        setFilters({ ...filters, location_search: suggestion.label })
+                        setSelectedLocation(suggestion)
                         setLocationSuggestions([])
                       }}
                       className="w-full text-left px-4 py-2 hover:bg-white/30 transition-all"
                     >
-                      {city}
+                      <div className="flex flex-col">
+                        <span className="font-medium text-sm text-gray-900">{suggestion.label}</span>
+                        {(suggestion.district || suggestion.region) && (
+                          <span className="text-xs text-gray-500">
+                            {[suggestion.district, suggestion.region].filter(Boolean).join(', ')}
+                          </span>
+                        )}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -2051,13 +2126,19 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
       setLocationSuggestions([])
       return
     }
-    
-    // Získat unikátní města z poptávek
-    const uniqueCities = [...new Set(demands.map(d => d.preferred_location).filter(Boolean))]
+
+    // Získat unikátní města z poptávek a z nové struktury locations
+    const fromPreferred = demands.map(d => d.preferred_location).filter(Boolean)
+    const fromLocations = demands
+      .flatMap(d => Array.isArray(d.locations) ? d.locations : [])
+      .map(loc => loc?.name || loc?.district || loc?.region)
+      .filter(Boolean)
+
+    const uniqueCities = [...new Set([...fromPreferred, ...fromLocations])]
     const matches = uniqueCities
       .filter(city => city.toLowerCase().includes(query.toLowerCase()))
       .slice(0, 5)
-    
+
     setLocationSuggestions(matches)
   }
 
@@ -2065,27 +2146,34 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
     if (filters.transaction_type && demand.transaction_type !== filters.transaction_type) return false
     if (filters.property_type && demand.property_type !== filters.property_type) return false
     
-    // Filtrování podle podtypu - kontrola v property_requirements nebo property_subtype
+    // Filtrování podle podtypu - pracujeme pouze s novou strukturou property_requirements
     if (filters.property_subtype) {
-      if (demand.property_requirements && Array.isArray(demand.property_requirements)) {
-        // Nová struktura - kontrola v property_requirements
-        const hasSubtype = demand.property_requirements.some(req => {
-          const subtypes = req.property_subtypes || (req.property_subtype ? [req.property_subtype] : []);
-          return subtypes.includes(filters.property_subtype);
-        });
-        if (!hasSubtype) return false;
-      } else if (demand.property_subtype !== filters.property_subtype) {
-        // Stará struktura
-        return false;
-      }
+      const requirements = Array.isArray(demand.property_requirements) ? demand.property_requirements : []
+      const hasSubtype = requirements.some(req => {
+        const subtypes = req?.property_subtypes
+        if (Array.isArray(subtypes)) {
+          return subtypes.includes(filters.property_subtype)
+        }
+        if (typeof req?.property_subtype === 'string') {
+          return req.property_subtype === filters.property_subtype
+        }
+        return false
+      })
+      if (!hasSubtype) return false
     }
     
     if (filters.price_min && demand.price_max < parseInt(filters.price_min)) return false
     if (filters.price_max && demand.price_min > parseInt(filters.price_max)) return false
     
     // Filtrování podle lokality - textové vyhledávání
-    if (filters.location_search && demand.preferred_location) {
-      if (!demand.preferred_location.toLowerCase().includes(filters.location_search.toLowerCase())) return false
+    if (filters.location_search) {
+      const query = filters.location_search.toLowerCase()
+      const preferredMatch = demand.preferred_location && demand.preferred_location.toLowerCase().includes(query)
+      const arrayMatch = Array.isArray(demand.locations) && demand.locations.some(loc => {
+        const candidate = loc?.name || loc?.district || loc?.region
+        return candidate ? candidate.toLowerCase().includes(query) : false
+      })
+      if (!preferredMatch && !arrayMatch) return false
     }
     
     // Filtr "Moje poptávky"
@@ -2185,7 +2273,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
           <div className="h-6 w-px bg-gray-300 mx-2"></div>
           
           <button
-            onClick={() => setFilters({ ...filters, property_type: '' })}
+            onClick={() => setFilters({ ...filters, property_type: '', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === '' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -2195,7 +2283,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
             Všechny typy
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'flat' })}
+            onClick={() => setFilters({ ...filters, property_type: 'flat', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'flat' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -2205,7 +2293,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
             Byty
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'house' })}
+            onClick={() => setFilters({ ...filters, property_type: 'house', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'house' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -2215,7 +2303,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
             Domy
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'commercial' })}
+            onClick={() => setFilters({ ...filters, property_type: 'commercial', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'commercial' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -2225,7 +2313,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
             Komerční
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'land' })}
+            onClick={() => setFilters({ ...filters, property_type: 'land', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'land' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
@@ -2235,7 +2323,7 @@ function Demands({ demands, currentUser, onAdd, onEdit, onDelete, onViewDetail, 
             Pozemky
           </button>
           <button
-            onClick={() => setFilters({ ...filters, property_type: 'project' })}
+            onClick={() => setFilters({ ...filters, property_type: 'project', property_subtype: '' })}
             className={`px-4 py-2 rounded-xl transition-all text-sm font-medium ${
               filters.property_type === 'project' 
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' 
