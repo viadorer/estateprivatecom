@@ -38,6 +38,15 @@ export default function LocationMultiSuggest({ locations = [], onChange, placeho
         const data = await response.json()
         
         const enrichedSuggestions = (data.items || []).map(item => {
+          const normalizedBbox = Array.isArray(item.bbox) && item.bbox.length === 4
+            ? {
+                minLon: item.bbox[0],
+                minLat: item.bbox[1],
+                maxLon: item.bbox[2],
+                maxLat: item.bbox[3]
+              }
+            : null
+
           const municipality = item.regionalStructure?.find(r => r.type === 'regional.municipality')?.name
           const district = item.regionalStructure?.find(r => r.type === 'regional.region' && r.name.startsWith('okres'))?.name
           const region = item.regionalStructure?.find(r => r.type === 'regional.region' && r.name.startsWith('kraj'))?.name
@@ -45,6 +54,7 @@ export default function LocationMultiSuggest({ locations = [], onChange, placeho
           
           return {
             ...item,
+            bbox: normalizedBbox,
             enrichedData: {
               name: item.name,
               type: item.type,
@@ -87,7 +97,8 @@ export default function LocationMultiSuggest({ locations = [], onChange, placeho
       district: suggestion.enrichedData?.district,
       region: suggestion.enrichedData?.region,
       latitude: suggestion.enrichedData?.latitude,
-      longitude: suggestion.enrichedData?.longitude
+      longitude: suggestion.enrichedData?.longitude,
+      bbox: suggestion.bbox || null
     }
     
     // Kontrola, zda už lokalita není přidána

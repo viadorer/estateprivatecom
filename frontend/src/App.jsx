@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
+import UserHistory from './components/UserHistory'
+import PropertiesMap from './components/PropertiesMap'
+import PropertyCard from './components/PropertyCard'
 import AdminImportSources from './components/AdminImportSources'
 import { Building2, Home, Search, Users as UsersIcon, LogOut, Building, Heart, Calendar, Edit, Pause, Play, Grid, List, Clock, User, FileText, Image as ImageIcon, Upload, X, Check, AlertCircle, Mail, Map, Plus, Trash2, MapPin, Lock } from 'lucide-react'
 import { LABELS_CS } from './constants'
@@ -16,9 +19,139 @@ import BrokerageContractModal from './components/BrokerageContractModal'
 import EntityHistory from './components/EntityHistory'
 import MatchesList from './components/MatchesList'
 import SignedDocuments from './components/SignedDocuments'
-import UserHistory from './components/UserHistory'
-import PropertiesMap from './components/PropertiesMap'
-import PropertyCard from './components/PropertyCard'
+
+const normalizeCommissionPayload = (payload) => ({
+  ...payload,
+  commission_value: payload.commission_value !== '' ? Number(payload.commission_value) : '',
+  commission_rate: payload.commission_rate !== '' ? Number(payload.commission_rate) : '',
+  commission_base_amount: payload.commission_base_amount !== '' ? Number(payload.commission_base_amount) : ''
+})
+
+const PROPERTY_PRESENTATION = {
+  flat: {
+    labels: {
+      headline: 'flatHeadline',
+      secondary: 'flatSecondary',
+      gridFacts: ['rooms', 'area', 'floor'],
+      gridBadges: ['has_balcony', 'has_terrace', 'has_loggia', 'has_elevator', 'has_parking', 'has_garage'],
+      listHighlights: ['transaction_type', 'property_type', 'property_subtype'],
+      listDetails: ['rooms', 'area', 'floor', 'total_floors', 'has_balcony', 'has_elevator', 'has_parking'],
+      listLocation: ['city', 'district', 'street']
+    }
+  },
+  house: {
+    labels: {
+      headline: 'houseHeadline',
+      secondary: 'houseSecondary',
+      gridFacts: ['rooms', 'area', 'land_area'],
+      gridBadges: ['has_garden', 'has_garage', 'has_parking', 'has_pool'],
+      listHighlights: ['transaction_type', 'property_type', 'property_subtype'],
+      listDetails: ['rooms', 'area', 'land_area', 'has_garden', 'has_garage', 'has_parking'],
+      listLocation: ['city', 'district', 'street']
+    }
+  },
+  commercial: {
+    labels: {
+      headline: 'commercialHeadline',
+      secondary: 'commercialSecondary',
+      gridFacts: ['area', 'floor', 'total_floors'],
+      gridBadges: ['has_parking'],
+      listHighlights: ['transaction_type', 'property_type', 'property_subtype'],
+      listDetails: ['area', 'floor', 'total_floors', 'has_parking'],
+      listLocation: ['city', 'district']
+    }
+  },
+  land: {
+    labels: {
+      headline: 'landHeadline',
+      secondary: 'landSecondary',
+      gridFacts: ['land_area', 'area'],
+      gridBadges: ['has_utilities'],
+      listHighlights: ['transaction_type', 'property_type', 'property_subtype'],
+      listDetails: ['land_area', 'area', 'has_utilities'],
+      listLocation: ['city', 'district']
+    }
+  },
+  project: {
+    labels: {
+      headline: 'projectHeadline',
+      secondary: 'projectSecondary',
+      gridFacts: ['project_units', 'area', 'project_completion'],
+      gridBadges: ['project_stage'],
+      listHighlights: ['transaction_type', 'property_type', 'project_stage'],
+      listDetails: ['project_units', 'area', 'project_completion'],
+      listLocation: ['city', 'district']
+    }
+  }
+}
+
+const PROPERTY_DISPLAY_RESOLVERS = {
+  flatHeadline: (property, labels) => `${labels[property.property_type] || 'Nemovitost'} ${labels[property.property_subtype] || property.property_subtype || ''}`.trim(),
+  flatSecondary: (property) => property.district || property.city || property.address || '',
+  houseHeadline: (property, labels) => `${labels[property.property_type] || 'Nemovitost'} ${labels[property.property_subtype] || ''}`.trim(),
+  houseSecondary: (property) => [property.city, property.district, property.address].filter(Boolean).join(', '),
+  commercialHeadline: (property, labels) => `${labels[property.property_type] || 'Nemovitost'} ${labels[property.property_subtype] || ''}`.trim(),
+  commercialSecondary: (property) => property.city || property.district || '',
+  landHeadline: (property, labels) => `${labels[property.property_type] || 'Pozemek'} ${labels[property.property_subtype] || ''}`.trim(),
+  landSecondary: (property) => property.city || property.district || '',
+  projectHeadline: (property, labels) => property.title || `${labels[property.property_type] || 'Projekt'} ${labels[property.property_subtype] || ''}`.trim(),
+  projectSecondary: (property) => property.city || property.district || '',
+  area: (property) => property.area ? `${property.area} m²` : null,
+  land_area: (property) => property.land_area ? `${property.land_area} m² pozemek` : null,
+  rooms: (property) => Number(property.rooms) > 0 ? `${property.rooms} pokoje` : null,
+  floor: (property) => property.floor ? `${property.floor}. patro` : null,
+  total_floors: (property) => property.total_floors ? `${property.total_floors} pater` : null,
+  project_units: (property) => property.project_units ? `${property.project_units} jednotek` : null,
+  project_completion: (property) => property.project_completion ? `Dokončení ${property.project_completion}` : null,
+  has_balcony: (property) => property.has_balcony ? 'Balkon' : null,
+  has_terrace: (property) => property.has_terrace ? 'Terasa' : null,
+  has_loggia: (property) => property.has_loggia ? 'Lodžie' : null,
+  has_elevator: (property) => property.has_elevator ? 'Výtah' : null,
+  has_parking: (property) => property.has_parking ? 'Parkování' : null,
+  has_garage: (property) => property.has_garage ? 'Garáž' : null,
+  has_cellar: (property) => property.has_cellar ? 'Sklep' : null,
+  has_garden: (property) => property.has_garden ? 'Zahrada' : null,
+  has_pool: (property) => property.has_pool ? 'Bazén' : null,
+  has_utilities: (property) => property.has_utilities ? 'Inženýrské sítě' : null,
+  project_stage: (property, labels) => property.project_stage ? labels[property.project_stage] || property.project_stage : null,
+  transaction_type: (property, labels) => labels[property.transaction_type] || property.transaction_type,
+  property_type: (property, labels) => labels[property.property_type] || property.property_type,
+  property_subtype: (property, labels) => labels[property.property_subtype] || property.property_subtype || null,
+  city: (property) => property.city || null,
+  district: (property) => property.district || null,
+  street: (property) => property.street || null
+}
+
+const buildPropertyPresentation = (property, labels = LABELS_CS) => {
+  const config = PROPERTY_PRESENTATION[property.property_type] || PROPERTY_PRESENTATION.flat
+  const resolve = (key) => {
+    const resolver = PROPERTY_DISPLAY_RESOLVERS[key]
+    if (!resolver) return null
+    return resolver(property, labels)
+  }
+
+  const headline = resolve(config.labels.headline)
+  const secondary = resolve(config.labels.secondary)
+  const gridFacts = (config.labels.gridFacts || []).map(resolve).filter(Boolean)
+  const gridBadges = (config.labels.gridBadges || []).map(resolve).filter(Boolean)
+
+  const listHighlights = (config.labels.listHighlights || []).map(resolve).filter(Boolean)
+  const listDetails = (config.labels.listDetails || []).map(resolve).filter(Boolean)
+  const listLocation = (config.labels.listLocation || []).map(resolve).filter(Boolean)
+
+  return {
+    headline,
+    secondary,
+    gridFacts,
+    gridBadges,
+    list: {
+      highlights: listHighlights,
+      details: listDetails,
+      location: listLocation
+    },
+    priceLabel: property.price_on_request ? 'Cena po podpisu LOI' : `${new Intl.NumberFormat('cs-CZ').format(property.price)} Kč`
+  }
+}
 
 const API_URL = 'http://localhost:3001/api'
 const MAPY_API_KEY = 'MTIdGpXVtxteHwipIwRw1MyH8f4IWYNgTyppp75Vp54'
@@ -923,7 +1056,10 @@ function App() {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  ...data,
+                  ...normalizeCommissionPayload({
+                    ...data,
+                    price_on_request: data.price_on_request ? 1 : 0
+                  }),
                   user_role: currentUser.role  // Přidáme roli pro určení statusu
                 })
               })
@@ -957,7 +1093,7 @@ function App() {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  ...data,
+                  ...normalizeCommissionPayload(data),
                   user_role: currentUser.role  // Přidáme roli pro určení statusu
                 })
               })
@@ -1450,10 +1586,15 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
   }) : []
 
   // Stránkování
-  const totalPages = Math.ceil(filteredProperties.length / itemsPerPage)
+  const enrichedProperties = filteredProperties.map(property => ({
+    ...property,
+    presentation: buildPropertyPresentation(property, LABELS_CS)
+  }))
+
+  const totalPages = Math.ceil(enrichedProperties.length / itemsPerPage)
   const indexOfLastItem = currentPage * itemsPerPage
   const indexOfFirstItem = indexOfLastItem - itemsPerPage
-  const currentProperties = viewMode === 'map' ? filteredProperties : filteredProperties.slice(indexOfFirstItem, indexOfLastItem)
+  const currentProperties = viewMode === 'map' ? enrichedProperties : enrichedProperties.slice(indexOfFirstItem, indexOfLastItem)
   
   // Reset na první stránku při změně filtrů
   useEffect(() => {
@@ -1852,7 +1993,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
 {viewMode === 'map' ? (
         <div className="h-[600px] rounded-lg overflow-hidden">
           <PropertiesMap 
-            properties={filteredProperties}
+            properties={enrichedProperties}
             onPropertyClick={(property) => {
               setMapViewMode('map')
               setViewMode('hidden')
@@ -1871,8 +2012,7 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
               key={property.id}
               property={property}
               currentUser={currentUser}
-              formatPrice={formatPrice}
-              LABELS_CS={LABELS_CS}
+              presentation={property.presentation}
               onViewDetail={onViewDetail}
               onEdit={onEdit}
               onToggleStatus={onToggleStatus}
@@ -1887,7 +2027,8 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
             const isMyProperty = property.agent_id === currentUser.id
             const hasLOI = property.has_loi === 1
             const hasContract = property.brokerage_contract_signed === 1
-            
+            const presentation = property.presentation
+
             return (
             <div key={property.id} className="glass-card hover:shadow-lg transition">
               <div className="flex gap-6">
@@ -1926,51 +2067,40 @@ function Properties({ properties, currentUser, mapViewMode, setMapViewMode, onAd
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h3 className="text-2xl font-bold text-gray-900 mb-2">
-                          {LABELS_CS[property.property_type]} {property.property_subtype}
+                          {presentation.headline}
                         </h3>
-                        <div className="flex items-center text-gray-600 mb-3">
-                          <Building className="w-5 h-5 mr-2" />
-                          <span className="text-lg">{property.district}</span>
-                        </div>
+                        {presentation.secondary && (
+                          <div className="flex items-center text-gray-600 mb-3">
+                            <Building className="w-5 h-5 mr-2" />
+                            <span className="text-lg truncate">{presentation.secondary}</span>
+                          </div>
+                        )}
                       </div>
                       <div className="text-3xl font-bold text-gradient whitespace-nowrap ml-4">
-                        {formatPrice(property.price)} Kč
+                        {presentation.priceLabel}
                       </div>
                     </div>
                     
-                    <div className="flex items-center space-x-8 text-gray-700 mb-4">
-                      <div className="flex items-center">
-                        <span className="text-2xl font-semibold mr-2">{property.area}</span>
-                        <span className="text-sm">m²</span>
+                    {presentation.list.details.length > 0 && (
+                      <div className="grid grid-cols-2 gap-3 text-gray-700 mb-4">
+                        {presentation.list.details.map((detail, idx) => (
+                          <div key={idx} className="flex items-center text-sm bg-white/70 px-3 py-2 rounded-lg">
+                            <span className="truncate">{detail}</span>
+                          </div>
+                        ))}
                       </div>
-                      <div className="flex items-center">
-                        <span className="text-2xl font-semibold mr-2">{property.rooms}</span>
-                        <span className="text-sm">pokoje</span>
-                      </div>
-                      <div className="flex items-center">
-                        <span className="text-2xl font-semibold mr-2">{property.floor}</span>
-                        <span className="text-sm">patro</span>
-                      </div>
-                    </div>
+                    )}
                     
                     <div className="flex flex-wrap gap-2">
-                      <span className="badge bg-purple-100 text-purple-700">
-                        <Building2 className="w-3.5 h-3.5" />
-                        {LABELS_CS[property.transaction_type]}
-                      </span>
-                      <span className="badge bg-blue-100 text-blue-700">
-                        <Home className="w-3.5 h-3.5" />
-                        {LABELS_CS[property.property_type]}
-                      </span>
-                      {property.has_balcony && (
-                        <span className="badge bg-green-100 text-green-700">Balkon</span>
-                      )}
-                      {property.has_elevator && (
-                        <span className="badge bg-green-100 text-green-700">Výtah</span>
-                      )}
-                      {property.has_parking && (
-                        <span className="badge bg-green-100 text-green-700">Parkování</span>
-                      )}
+                      {presentation.list.highlights.map((badge, idx) => (
+                        <span key={`highlight-${idx}`} className="badge bg-purple-100 text-purple-700 flex items-center gap-1">
+                          <Building2 className="w-3.5 h-3.5" />
+                          {badge}
+                        </span>
+                      ))}
+                      {presentation.list.location.map((loc, idx) => (
+                        <span key={`loc-${idx}`} className="badge bg-blue-100 text-blue-700">{loc}</span>
+                      ))}
                     </div>
                   </div>
                   
@@ -2866,6 +2996,9 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
     property_type: property?.property_type || 'flat',
     property_subtype: property?.property_subtype || '2+kk',
     price: property?.price || '',
+    price_currency: property?.price_currency || 'CZK',
+    price_unit: property?.price_unit || 'total',
+    price_on_request: property?.price_on_request || 0,
     price_note: property?.price_note || '',
     city: property?.city || '',
     district: property?.district || '',
@@ -2905,7 +3038,16 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
     video_tour_url: property?.video_tour_url || '',
     matterport_url: property?.matterport_url || '',
     website_url: property?.website_url || '',
-    validity_days: property?.validity_days || 14
+    validity_days: property?.validity_days || 14,
+    commission_type: property?.commission_type || 'percent',
+    commission_value: property?.commission_value || '',
+    commission_currency: property?.commission_currency || property?.price_currency || 'CZK',
+    commission_payer: property?.commission_payer || 'seller',
+    commission_vat: property?.commission_vat || 'bez DPH',
+    commission_terms: property?.commission_terms || '',
+    commission_rate: property?.commission_rate || '',
+    commission_base_amount: property?.commission_base_amount || '',
+    contract_signed_at: property?.contract_signed_at || ''
   })
   
   const [uploading, setUploading] = useState(false)
@@ -3149,20 +3291,43 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Cena (Kč)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Cena</label>
                 <input
                   type="number"
                   required={!formData.price_on_request}
-                  value={formData.price}
+                  value={formData.price ?? ''}
                   onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                   className="glass-input"
                   disabled={formData.price_on_request}
                 />
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <select
+                    value={formData.price_currency}
+                    onChange={(e) => setFormData({ ...formData, price_currency: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="CZK">CZK</option>
+                    <option value="EUR">EUR</option>
+                    <option value="USD">USD</option>
+                    <option value="BTC">BTC</option>
+                  </select>
+                  <select
+                    value={formData.price_unit}
+                    onChange={(e) => setFormData({ ...formData, price_unit: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="total">Celková cena</option>
+                    <option value="per_m2">Cena / m²</option>
+                    <option value="per_m2_month">Cena / m² / měsíc</option>
+                    <option value="per_unit">Cena / jednotku</option>
+                    <option value="per_unit_month">Cena / jednotku / měsíc</option>
+                  </select>
+                </div>
                 <label className="flex items-center mt-2 text-sm">
                   <input
                     type="checkbox"
                     checked={formData.price_on_request || false}
-                    onChange={(e) => setFormData({ ...formData, price_on_request: e.target.checked ? 1 : 0 })}
+                    onChange={(e) => setFormData({ ...formData, price_on_request: e.target.checked ? 1 : 0, price: e.target.checked ? '' : formData.price })}
                     className="mr-2"
                   />
                   <span className="text-gray-700">Cena po podpisu LOI</span>
@@ -3486,154 +3651,276 @@ function PropertyModal({ property, users, onSave, onClose, currentUser }) {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Typ stavby</label>
-                <select
-                  value={formData.building_type}
-                  onChange={(e) => setFormData({ ...formData, building_type: e.target.value })}
-                  className="glass-input"
-                >
-                  <option value="">Vyberte</option>
-                  <option value="brick">Cihlová</option>
-                  <option value="panel">Panelová</option>
-                  <option value="wood">Dřevěná</option>
-                  <option value="stone">Kamenná</option>
-                  <option value="mixed">Smíšená</option>
-                  <option value="monolithic">Monolitická</option>
-                  <option value="skeleton">Skeletová</option>
-                  <option value="other">Jiná</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Stav stavby</label>
-                <select
-                  value={formData.building_condition}
-                  onChange={(e) => setFormData({ ...formData, building_condition: e.target.value })}
-                  className="glass-input"
-                >
-                  <option value="">Vyberte</option>
-                  <option value="new_building">Novostavba</option>
-                  <option value="very_good">Velmi dobrý</option>
-                  <option value="good">Dobrý</option>
-                  <option value="after_reconstruction">Po rekonstrukci</option>
-                  <option value="before_reconstruction">Před rekonstrukcí</option>
-                  <option value="in_construction">Ve výstavbě</option>
-                  <option value="project">Projekt</option>
-                  <option value="demolished">K demolici</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Vlastnictví</label>
-                <select
-                  value={formData.ownership}
-                  onChange={(e) => setFormData({ ...formData, ownership: e.target.value })}
-                  className="glass-input"
-                >
-                  <option value="">Vyberte</option>
-                  <option value="personal">Osobní</option>
-                  <option value="cooperative">Družstevní</option>
-                  <option value="state">Státní</option>
-                  <option value="church">Církevní</option>
-                  <option value="transferred">Převedené</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Vybavení</label>
-                <select
-                  value={formData.furnished}
-                  onChange={(e) => setFormData({ ...formData, furnished: e.target.value })}
-                  className="glass-input"
-                >
-                  <option value="not_furnished">Nevybaveno</option>
-                  <option value="partly_furnished">Částečně vybaveno</option>
-                  <option value="furnished">Vybaveno</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Energetická třída</label>
-                <select
-                  value={formData.energy_rating}
-                  onChange={(e) => setFormData({ ...formData, energy_rating: e.target.value })}
-                  className="glass-input"
-                >
-                  <option value="">Vyberte</option>
-                  <option value="A">A - Velmi úsporná</option>
-                  <option value="B">B - Úsporná</option>
-                  <option value="C">C - Vyhovující</option>
-                  <option value="D">D - Nevyhovující</option>
-                  <option value="E">E - Nehospodárná</option>
-                  <option value="F">F - Velmi nehospodárná</option>
-                  <option value="G">G - Mimořádně nehospodárná</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Typ vytápění</label>
-                <select
-                  value={formData.heating_type}
-                  onChange={(e) => setFormData({ ...formData, heating_type: e.target.value })}
-                  className="glass-input"
-                >
-                  <option value="">Vyberte</option>
-                  <option value="gas">Plynové</option>
-                  <option value="electric">Elektrické</option>
-                  <option value="central">Ústřední</option>
-                  <option value="heat_pump">Tepelné čerpadlo</option>
-                  <option value="solid_fuel">Tuhá paliva</option>
-                  <option value="other">Jiné</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">URL webu nemovitosti</label>
-                <input
-                  type="url"
-                  value={formData.website_url}
-                  onChange={(e) => setFormData({ ...formData, website_url: e.target.value })}
-                  className="glass-input"
-                  placeholder="https://..."
-                />
-              </div>
-              
-              <div className="col-span-2">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Speciální označení</h4>
-                <div className="grid grid-cols-3 gap-4">
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={formData.is_auction}
-                      onChange={(e) => setFormData({ ...formData, is_auction: e.target.checked ? 1 : 0 })}
-                      className="rounded"
-                    />
-                    <span className="text-sm text-gray-700">Dražba</span>
-                  </label>
-                  
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={formData.exclusively_at_rk}
-                      onChange={(e) => setFormData({ ...formData, exclusively_at_rk: e.target.checked ? 1 : 0 })}
-                      className="rounded"
-                    />
-                    <span className="text-sm text-gray-700">Exkluzivně v RK</span>
-                  </label>
-                  
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={formData.attractive_offer}
-                      onChange={(e) => setFormData({ ...formData, attractive_offer: e.target.checked ? 1 : 0 })}
-                      className="rounded"
-                    />
-                    <span className="text-sm text-gray-700">Atraktivní nabídka</span>
-                  </label>
+                  <select
+                    value={formData.building_type}
+                    onChange={(e) => setFormData({ ...formData, building_type: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="">Vyberte</option>
+                    <option value="brick">Cihlová</option>
+                    <option value="panel">Panelová</option>
+                    <option value="wood">Dřevěná</option>
+                    <option value="stone">Kamenná</option>
+                    <option value="mixed">Smíšená</option>
+                    <option value="monolithic">Monolitická</option>
+                    <option value="skeleton">Skeletová</option>
+                    <option value="other">Jiná</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Stav stavby</label>
+                  <select
+                    value={formData.building_condition}
+                    onChange={(e) => setFormData({ ...formData, building_condition: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="">Vyberte</option>
+                    <option value="new_building">Novostavba</option>
+                    <option value="very_good">Velmi dobrý</option>
+                    <option value="good">Dobrý</option>
+                    <option value="after_reconstruction">Po rekonstrukci</option>
+                    <option value="before_reconstruction">Před rekonstrukcí</option>
+                    <option value="in_construction">Ve výstavbě</option>
+                    <option value="project">Projekt</option>
+                    <option value="demolished">K demolici</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Vlastnictví</label>
+                  <select
+                    value={formData.ownership}
+                    onChange={(e) => setFormData({ ...formData, ownership: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="">Vyberte</option>
+                    <option value="personal">Osobní</option>
+                    <option value="cooperative">Družstevní</option>
+                    <option value="state">Státní</option>
+                    <option value="church">Církevní</option>
+                    <option value="transferred">Převedené</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Vybavení</label>
+                  <select
+                    value={formData.furnished}
+                    onChange={(e) => setFormData({ ...formData, furnished: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="not_furnished">Nevybaveno</option>
+                    <option value="partly_furnished">Částečně vybaveno</option>
+                    <option value="furnished">Vybaveno</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Energetická třída</label>
+                  <select
+                    value={formData.energy_rating}
+                    onChange={(e) => setFormData({ ...formData, energy_rating: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="">Vyberte</option>
+                    <option value="A">A - Velmi úsporná</option>
+                    <option value="B">B - Úsporná</option>
+                    <option value="C">C - Vyhovující</option>
+                    <option value="D">D - Nevyhovující</option>
+                    <option value="E">E - Nehospodárná</option>
+                    <option value="F">F - Velmi nehospodárná</option>
+                    <option value="G">G - Mimořádně nehospodárná</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Typ vytápění</label>
+                  <select
+                    value={formData.heating_type}
+                    onChange={(e) => setFormData({ ...formData, heating_type: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="">Vyberte</option>
+                    <option value="gas">Plynové</option>
+                    <option value="electric">Elektrické</option>
+                    <option value="central">Ústřední</option>
+                    <option value="heat_pump">Tepelné čerpadlo</option>
+                    <option value="solid_fuel">Tuhá paliva</option>
+                    <option value="other">Jiné</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">URL webu nemovitosti</label>
+                  <input
+                    type="url"
+                    value={formData.website_url}
+                    onChange={(e) => setFormData({ ...formData, website_url: e.target.value })}
+                    className="glass-input"
+                    placeholder="https://..."
+                  />
+                </div>
+                
+                <div className="col-span-2">
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">Speciální označení</h4>
+                  <div className="grid grid-cols-3 gap-4">
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={formData.is_auction}
+                        onChange={(e) => setFormData({ ...formData, is_auction: e.target.checked ? 1 : 0 })}
+                        className="rounded"
+                      />
+                      <span className="text-sm text-gray-700">Dražba</span>
+                    </label>
+                    
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={formData.exclusively_at_rk}
+                        onChange={(e) => setFormData({ ...formData, exclusively_at_rk: e.target.checked ? 1 : 0 })}
+                        className="rounded"
+                      />
+                      <span className="text-sm text-gray-700">Exkluzivně v RK</span>
+                    </label>
+                    
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={formData.attractive_offer}
+                        onChange={(e) => setFormData({ ...formData, attractive_offer: e.target.checked ? 1 : 0 })}
+                        className="rounded"
+                      />
+                      <span className="text-sm text-gray-700">Atraktivní nabídka</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
-            </div>
           )}
+
+          {/* Provize a spolupráce */}
+          <div className="space-y-4">
+            <div className="glass-card p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Provize a podmínky spolupráce</h3>
+              <p className="text-sm text-gray-700">
+                Zadejte hodnoty, které máte s klientem dohodnuté. Provize slouží jako podklad pro zprostředkovatelskou smlouvu –
+                po schválení z ní administrátor vypočítá odměnu portálu Estate Private (typicky 25&nbsp;% až 50&nbsp;% z celkové provize).
+                Přesné a odsouhlasené údaje urychlí přípravu smlouvy i vyúčtování.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Typ provize</label>
+                <select
+                  value={formData.commission_type}
+                  onChange={(e) => setFormData({ ...formData, commission_type: e.target.value })}
+                  className="glass-input"
+                  required
+                >
+                  <option value="percent">Procento z ceny</option>
+                  <option value="amount">Pevná částka</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  {formData.commission_type === 'amount' ? 'Výše provize' : 'Provize v %'}
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={formData.commission_value}
+                  onChange={(e) => setFormData({ ...formData, commission_value: e.target.value })}
+                  className="glass-input"
+                  required
+                />
+              </div>
+
+              {formData.commission_type === 'amount' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Měna provize</label>
+                  <select
+                    value={formData.commission_currency}
+                    onChange={(e) => setFormData({ ...formData, commission_currency: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="CZK">CZK</option>
+                    <option value="EUR">EUR</option>
+                    <option value="USD">USD</option>
+                    <option value="BTC">BTC</option>
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Provizi hradí</label>
+                <select
+                  value={formData.commission_payer}
+                  onChange={(e) => setFormData({ ...formData, commission_payer: e.target.value })}
+                  className="glass-input"
+                >
+                  <option value="seller">Prodávající</option>
+                  <option value="buyer">Kupující</option>
+                  <option value="both">Obě strany</option>
+                  <option value="other">Jiná dohoda</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Režim DPH</label>
+                <select
+                  value={formData.commission_vat}
+                  onChange={(e) => setFormData({ ...formData, commission_vat: e.target.value })}
+                  className="glass-input"
+                >
+                  <option value="bez DPH">Bez DPH</option>
+                  <option value="včetně DPH">Včetně DPH</option>
+                  <option value="+ DPH">+ DPH</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Výsledná sazba (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={formData.commission_rate}
+                  onChange={(e) => setFormData({ ...formData, commission_rate: e.target.value })}
+                  className="glass-input"
+                  placeholder="Automaticky vypočteno nebo zadejte ručně"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Základ pro výpočet</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={formData.commission_base_amount}
+                  onChange={(e) => setFormData({ ...formData, commission_base_amount: e.target.value })}
+                  className="glass-input"
+                  placeholder="Celková cena transakce"
+                />
+              </div>
+
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Podmínky provize</label>
+                <textarea
+                  rows="3"
+                  value={formData.commission_terms}
+                  onChange={(e) => setFormData({ ...formData, commission_terms: e.target.value })}
+                  className="glass-input"
+                  placeholder="Např. datum splatnosti, navazující služby, speciální podmínky..."
+                />
+              </div>
+            </div>
+          </div>
 
           {/* Fotografie */}
           <div className="space-y-4">
@@ -4138,8 +4425,8 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
   
   const [commonFilters, setCommonFilters] = useState({
     price: {
-      min: demand?.common_filters?.price?.min || '',
-      max: demand?.common_filters?.price?.max || ''
+      min: demand?.common_filters?.price?.min ?? '',
+      max: demand?.common_filters?.price?.max ?? ''
     }
   })
   
@@ -4151,7 +4438,15 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
     client_id: demand?.client_id || currentUser.id,
     status: demand?.status || 'active',
     email_notifications: demand?.email_notifications !== undefined ? demand.email_notifications : 1,
-    validity_days: demand?.validity_days || 30
+    validity_days: demand?.validity_days || 30,
+    commission_type: demand?.commission_type || 'percent',
+    commission_value: demand?.commission_value || '',
+    commission_currency: demand?.commission_currency || 'CZK',
+    commission_payer: demand?.commission_payer || 'buyer',
+    commission_vat: demand?.commission_vat || 'bez DPH',
+    commission_rate: demand?.commission_rate || '',
+    commission_base_amount: demand?.commission_base_amount || '',
+    commission_terms: demand?.commission_terms || ''
   })
 
   // Přidat novou konfiguraci typu nemovitosti
@@ -4231,27 +4526,35 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
           {demand ? 'Upravit poptávku' : 'Vytvořit poptávku'}
         </h2>
         
-        {/* Nápověda */}
-        <div className="glass-card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 mb-6">
-          <div className="flex items-start gap-3">
-            <div className="icon-circle icon-circle-sm bg-blue-100 text-blue-600">
-              <Building2 className="w-4 h-4" />
-            </div>
-            <div className="flex-1">
-              <h4 className="font-semibold text-blue-900 mb-2">Jak vytvořit poptávku?</h4>
-              <div className="text-sm text-blue-800 space-y-2">
-                <p><strong>1. Společné informace:</strong> Zadejte cenové rozpětí, platnost a lokality (města, čtvrti, okresy).</p>
-                <p><strong>2. Specifické požadavky:</strong> Pro každý typ nemovitosti můžete zadat vlastní kritéria:</p>
-                <ul className="list-disc list-inside ml-4 space-y-1">
-                  <li><strong>Byt:</strong> počet pokojů, patro, plocha</li>
-                  <li><strong>Dům:</strong> počet pokojů, plocha, plocha pozemku</li>
-                  <li><strong>Pozemek:</strong> plocha pozemku</li>
-                  <li><strong>Komerční:</strong> plocha, patro (pro kanceláře)</li>
-                </ul>
-                <p><strong>3. Více typů najednou:</strong> Klikněte na "Přidat další typ nemovitosti" pro vytvoření komplexní poptávky (např. byt NEBO dům).</p>
-                <p className="text-xs text-blue-600 mt-2">💡 Tip: GPS souřadnice lokalit se ukládají automaticky pro přesné vyhledávání.</p>
+        {/* Informace o poptávce a spolupráci */}
+        <div className="space-y-4 mb-6">
+          <div className="glass-card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200">
+            <div className="flex items-start gap-3">
+              <div className="icon-circle icon-circle-sm bg-blue-100 text-blue-600">
+                <Building2 className="w-4 h-4" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-semibold text-blue-900 mb-2">Jak vytvořit poptávku?</h4>
+                <div className="text-sm text-blue-800 space-y-2">
+                  <p><strong>1. Společné informace:</strong> Zadejte cenové rozpětí, platnost a lokality (města, čtvrti, okresy).</p>
+                  <p><strong>2. Specifické požadavky:</strong> Pro každý typ nemovitosti můžete zadat vlastní kritéria (pokoje, patro, plocha, vybavení...)</p>
+                  <p><strong>3. Více typů najednou:</strong> Klikněte na "Přidat další typ nemovitosti" pro vytvoření komplexní poptávky.</p>
+                </div>
               </div>
             </div>
+          </div>
+
+          <div className="glass-card p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200">
+            <h4 className="font-semibold text-gray-900 mb-2">Provize a smlouva o vyhledání nemovitosti</h4>
+            <p className="text-sm text-gray-700">
+              Vyplňte provizní model, který máte s klientem dohodnutý. Po odeslání poptávky proběhne generování smlouvy o vyhledání
+              příležitosti – administrátor připraví dokument, ve kterém bude sjednána vaše odměna za úspěšné zprostředkování.
+              U poptávek se standardně pohybujeme v rozmezí 0,5&nbsp;% až 3&nbsp;% z dosažené kupní ceny podle charakteru obchodu.
+            </p>
+            <p className="text-xs text-gray-500 mt-3">
+              Smlouva a přístupový kód fungují stejně jako u nabídek: po schválení poptávky obdržíte e-mail s dalšími kroky
+              a klient získá přístup přes unikátní kód.
+            </p>
           </div>
         </div>
         
@@ -4337,10 +4640,145 @@ function DemandModal({ demand, users, onSave, onClose, currentUser }) {
               <LocationMultiSuggest
                 locations={locations}
                 onChange={setLocations}
-                placeholder="Zadejte lokalitu (např. Praha, Brno-střed, okres Plzeň-jih)"
+                placeholder="Zadejte lokalitu (např. Praha, Brno...)"
               />
             </div>
-            
+
+            {/* Provize a spolupráce */}
+            <div className="col-span-2">
+              <div className="glass-card p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Provize za úspěšné vyhledání</h3>
+                <p className="text-sm text-gray-700">
+                  Tato provize se stává součástí smlouvy o vyhledání příležitosti. Po podpisu s klientem se z ní odvíjí vyúčtování
+                  mezi vámi a portálem Estate Private.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Typ provize</label>
+                  <select
+                    value={formData.commission_type}
+                    onChange={(e) => setFormData({ ...formData, commission_type: e.target.value })}
+                    className="glass-input"
+                    required
+                  >
+                    <option value="percent">Procento z kupní ceny</option>
+                    <option value="amount">Pevná částka</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    {formData.commission_type === 'amount' ? 'Výše provize' : 'Provize v %'}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.commission_value}
+                    onChange={(e) => setFormData({ ...formData, commission_value: e.target.value })}
+                    className="glass-input"
+                    required
+                  />
+                  {formData.commission_type === 'percent' && (
+                    <p className="text-xs text-gray-500 mt-1">Doporučené rozpětí: 0,5&nbsp;% až 3&nbsp;% dle charakteru obchodu.</p>
+                  )}
+                </div>
+
+                {formData.commission_type === 'amount' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Měna</label>
+                    <select
+                      value={formData.commission_currency}
+                      onChange={(e) => setFormData({ ...formData, commission_currency: e.target.value })}
+                      className="glass-input"
+                    >
+                      <option value="CZK">CZK</option>
+                      <option value="EUR">EUR</option>
+                      <option value="USD">USD</option>
+                      <option value="BTC">BTC</option>
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Provizi hradí</label>
+                  <select
+                    value={formData.commission_payer}
+                    onChange={(e) => setFormData({ ...formData, commission_payer: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="buyer">Kupující (klient)</option>
+                    <option value="seller">Prodávající</option>
+                    <option value="both">Obě strany</option>
+                    <option value="other">Jiná dohoda</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Režim DPH</label>
+                  <select
+                    value={formData.commission_vat}
+                    onChange={(e) => setFormData({ ...formData, commission_vat: e.target.value })}
+                    className="glass-input"
+                  >
+                    <option value="bez DPH">Bez DPH</option>
+                    <option value="včetně DPH">Včetně DPH</option>
+                    <option value="+ DPH">+ DPH</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Odhadovaná sazba (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.commission_rate}
+                    onChange={(e) => setFormData({ ...formData, commission_rate: e.target.value })}
+                    className="glass-input"
+                    placeholder="Např. 1.5"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Základ pro výpočet</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.commission_base_amount}
+                    onChange={(e) => setFormData({ ...formData, commission_base_amount: e.target.value })}
+                    className="glass-input"
+                    placeholder="Odhadovaná kupní cena"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Speciální podmínky</label>
+                  <textarea
+                    rows="3"
+                    value={formData.commission_terms}
+                    onChange={(e) => setFormData({ ...formData, commission_terms: e.target.value })}
+                    className="glass-input"
+                    placeholder="Např. splatnost odměny, navazující služby, bonusy..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="col-span-2">
+              <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 text-sm text-blue-800 space-y-2">
+                <p><strong>Před dokončením poptávky proběhne:</strong></p>
+                <ol className="list-decimal list-inside space-y-1">
+                  <li>Administrátor zkontroluje zadané informace a připraví smlouvu o vyhledání příležitosti.</li>
+                  <li>Do e-mailu obdržíte návrh smlouvy a přístupový kód k poptávce; klient zároveň dostane instrukce k podpisu.</li>
+                  <li>Po podpisu smlouvy je poptávka aktivována a můžete přidávat nabídky.</li>
+                </ol>
+              </div>
+            </div>
+
             {/* Nová sekce: Specifické požadavky podle typu nemovitosti */}
             <div className="col-span-2">
               <div className="border-t border-gray-200 my-6"></div>
@@ -5108,24 +5546,24 @@ function PropertyDetail({ property, currentUser, onClose, onEdit, onToggleStatus
   const [accessReason, setAccessReason] = useState(null)
   const [accessMessage, setAccessMessage] = useState(null)
 
-  // Kontrola přístupu k detailu
-  useEffect(() => {
-    const checkAccess = async () => {
-      try {
-        const response = await fetch(`${API_URL}/properties/${property.id}/check-access/${currentUser.id}`)
-        const data = await response.json()
-        
-        setHasAccess(data.hasAccess)
-        setAccessReason(data.reason)
-        setAccessMessage(data.message)
-      } catch (error) {
-        console.error('Chyba při kontrole přístupu:', error)
-        setHasAccess(false)
-      }
+  const checkAccess = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/properties/${property.id}/check-access/${currentUser.id}`)
+      const data = await response.json()
+
+      setHasAccess(data.hasAccess)
+      setAccessReason(data.reason)
+      setAccessMessage(data.message)
+    } catch (error) {
+      console.error('Chyba při kontrole přístupu:', error)
+      setHasAccess(false)
     }
-    
-    checkAccess()
   }, [property.id, currentUser.id])
+
+  useEffect(() => {
+    setHasAccess(null)
+    checkAccess()
+  }, [checkAccess])
   
   const formatPrice = (price) => {
     return new Intl.NumberFormat('cs-CZ').format(price)
@@ -5163,8 +5601,8 @@ function PropertyDetail({ property, currentUser, onClose, onEdit, onToggleStatus
       entityType="property"
       currentUser={currentUser}
       onLOISigned={() => {
-        // Po podpisu LOI znovu zkontrolovat přístup - nastavit hasAccess na null aby se znovu načetl
         setHasAccess(null)
+        checkAccess()
       }}
     />
   }
@@ -6121,93 +6559,166 @@ function DemandDetail({ demand, currentUser, onClose, onEdit, onAddProperty, onA
 }
 
 function UserDetail({ user, currentUser, onClose, onEdit }) {
+  const [activeTab, setActiveTab] = useState('profile')
+
+  const tabs = [
+    { id: 'profile', label: 'Profil' },
+    user.company_name ? { id: 'company', label: 'Společnost' } : null,
+    { id: 'history', label: 'Historie' }
+  ].filter(Boolean)
+
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="glass-card max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="flex justify-between items-start mb-6">
-          <div className="flex items-center space-x-3">
-            <div className="w-16 h-16 rounded-full bg-primary-100 flex items-center justify-center">
-              <User className="w-8 h-8 text-primary-600" />
+      <div className="glass-card max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-start justify-between p-6 pb-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-100 via-white/80 to-primary-50 border border-white/60 flex items-center justify-center shadow-sm">
+              <User className="w-7 h-7 text-primary-600" />
             </div>
             <div>
-              <h2 className="text-3xl font-bold text-gradient">{user.name}</h2>
-              <span className="badge bg-purple-100 text-purple-700">
-                {LABELS_CS[user.role]}
-              </span>
+              <h2 className="text-2xl font-bold text-gray-900">{user.name}</h2>
+              <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary-50 text-primary-600 px-3 py-1 font-medium">
+                  {LABELS_CS[user.role]}
+                </span>
+                {user.id && (
+                  <span className="text-xs uppercase tracking-wide text-gray-400">
+                    ID: {user.id}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
         </div>
 
-        <div className="space-y-6">
-          {/* Kontaktní informace */}
-          <div>
-            <h3 className="text-xl font-bold text-gray-900 mb-3">Kontaktní informace</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Email</div>
-                <div className="font-semibold">{user.email}</div>
+        <div className="px-6 pb-4">
+          <div className="flex items-center gap-2 bg-white/60 border border-white/80 rounded-full p-1.5 shadow-inner">
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 rounded-full px-4 py-2 text-sm font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-primary-200 ${
+                  activeTab === tab.id
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                    : 'bg-white/80 text-gray-600 hover:text-primary-600'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
+          {activeTab === 'profile' && (
+            <div className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="glass-card p-4 border border-white/60">
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Email</div>
+                  <div className="text-sm font-semibold text-gray-900">{user.email}</div>
+                </div>
+                <div className="glass-card p-4 border border-white/60">
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Telefon</div>
+                  <div className="text-sm font-semibold text-gray-900">{user.phone || '—'}</div>
+                </div>
+                {user.phone_2 && (
+                  <div className="glass-card p-4 border border-white/60">
+                    <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Telefon 2</div>
+                    <div className="text-sm font-semibold text-gray-900">{user.phone_2}</div>
+                  </div>
+                )}
+                <div className="glass-card p-4 border border-white/60">
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Role v systému</div>
+                  <div className="text-sm font-semibold text-gray-900">{LABELS_CS[user.role]}</div>
+                </div>
               </div>
-              <div className="glass-card p-4">
-                <div className="text-sm text-gray-600 mb-1">Telefon</div>
-                <div className="font-semibold">{user.phone || '-'}</div>
+
+              <div className="glass-card p-4 border border-white/60">
+                <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Adresa</div>
+                <div className="text-sm text-gray-900">
+                  <div>{user.address_street || '—'}</div>
+                  <div>{user.address_city || '—'} {user.address_zip || ''}</div>
+                </div>
               </div>
-              {user.phone_2 && (
-                <div className="glass-card p-4">
-                  <div className="text-sm text-gray-600 mb-1">Telefon 2</div>
-                  <div className="font-semibold">{user.phone_2}</div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="glass-card p-4 border border-white/60">
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Vytvořen</div>
+                  <div className="text-sm font-semibold text-gray-900">
+                    {user.created_at ? new Date(user.created_at).toLocaleString('cs-CZ') : '—'}
+                  </div>
+                </div>
+                <div className="glass-card p-4 border border-white/60">
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Poslední aktivita</div>
+                  <div className="text-sm font-semibold text-gray-900">
+                    {user.last_login_at ? new Date(user.last_login_at).toLocaleString('cs-CZ') : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {user.notes && (
+                <div className="glass-card p-4 border border-white/60">
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Poznámky</div>
+                  <p className="text-sm leading-relaxed text-gray-700 whitespace-pre-wrap">{user.notes}</p>
                 </div>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Adresa */}
-          <div>
-            <h3 className="text-xl font-bold text-gray-900 mb-3">Adresa</h3>
-            <div className="glass-card p-4">
-              <div>{user.address_street || '-'}</div>
-              <div>{user.address_city || '-'} {user.address_zip || ''}</div>
-            </div>
-          </div>
+          {activeTab === 'company' && (
+            <div className="space-y-5">
+              <div className="glass-card p-6 border border-white/60">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">{user.company_name}</h3>
+                    {user.company_position && (
+                      <p className="text-sm text-gray-500 mt-1">{user.company_position}</p>
+                    )}
+                  </div>
+                  <div className="rounded-full bg-primary-50 text-primary-600 px-3 py-1 text-sm font-medium">
+                    Firemní údaje
+                  </div>
+                </div>
 
-          {/* Společnost */}
-          {user.company_name && (
-            <div>
-              <h3 className="text-xl font-bold text-gray-900 mb-3">Společnost</h3>
-              <div className="glass-card p-4">
-                <div className="font-semibold text-lg">{user.company_name}</div>
-                {user.company_position && (
-                  <div className="text-gray-600">{user.company_position}</div>
-                )}
-                {user.company_ico && (
-                  <div className="text-sm text-gray-600 mt-2">IČO: {user.company_ico}</div>
-                )}
+                <div className="grid gap-4 mt-6 md:grid-cols-2">
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">IČO</div>
+                    <div className="text-sm font-semibold text-gray-900">{user.company_ico || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">DIČ</div>
+                    <div className="text-sm font-semibold text-gray-900">{user.company_dic || '—'}</div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Sídlo</div>
+                    <div className="text-sm text-gray-900">{user.company_address || '—'}</div>
+                  </div>
+                </div>
               </div>
+
+              {!user.company_name && (
+                <div className="glass-card p-6 border border-dashed border-white/60 text-center text-sm text-gray-500">
+                  Uživatel zatím nemá vyplněné firemní údaje.
+                </div>
+              )}
             </div>
           )}
 
-          {/* Poznámky */}
-          {user.notes && (
-            <div>
-              <h3 className="text-xl font-bold text-gray-900 mb-3">Poznámky</h3>
-              <div className="glass-card p-4">
-                <p className="text-gray-700">{user.notes}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Historie uživatele */}
-          <UserHistory userId={user.id} userName={user.name} />
-
-          {/* Tlačítka pro admina */}
-          {currentUser.role === 'admin' && (
-            <div className="flex space-x-3 pt-4 border-t">
-              <button onClick={onEdit} className="glass-button flex-1 rounded-full">
-                Upravit uživatele
-              </button>
+          {activeTab === 'history' && (
+            <div className="glass-card p-4 border border-white/60">
+              <UserHistory userId={user.id} userName={user.name} userRole={LABELS_CS[user.role]} />
             </div>
           )}
         </div>
+
+        {currentUser.role === 'admin' && (
+          <div className="border-t border-white/60 px-6 py-4 bg-white/40 backdrop-blur flex gap-3">
+            <button onClick={onEdit} className="glass-button flex-1 rounded-full">
+              Upravit uživatele
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

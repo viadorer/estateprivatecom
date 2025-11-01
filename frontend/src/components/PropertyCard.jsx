@@ -3,8 +3,16 @@ import { Building, Edit, Pause, Play } from 'lucide-react'
 
 const API_URL = '/api'
 
-export default function PropertyCard({ property, currentUser, formatPrice, LABELS_CS, onViewDetail, onEdit, onToggleStatus, onGenerateCode, onApprove }) {
+export default function PropertyCard({ property, currentUser, presentation, onViewDetail, onEdit, onToggleStatus, onGenerateCode, onApprove }) {
   const [hasAccess, setHasAccess] = useState(null) // null = loading, true/false = result
+
+  const infoLine = (() => {
+    const values = [...(presentation.gridFacts || []), ...(presentation.gridBadges || [])]
+    if (values.length === 0) {
+      return 'Specifikace budou doplněny'
+    }
+    return values.slice(0, 3).join(' • ')
+  })()
 
   useEffect(() => {
     // Admin a agent mají vždy přístup
@@ -64,24 +72,22 @@ export default function PropertyCard({ property, currentUser, formatPrice, LABEL
         </div>
       </div>
       
-      <h3 className="text-xl font-bold text-gray-900 mb-2">
-        {LABELS_CS[property.property_type]} {property.property_subtype}
+      <h3 className="text-xl font-bold text-gray-900 mb-1">
+        {presentation.headline}
       </h3>
-      
-      <div className="flex items-center text-gray-600 text-sm mb-3">
+
+      <div className="flex items-center text-gray-600 text-sm mb-2">
         <Building className="w-4 h-4 mr-1" />
-        {property.district}
+        <span className="truncate">{presentation.secondary || 'Lokalita bude upřesněna'}</span>
       </div>
-      
-      <div className="flex items-center justify-between text-sm text-gray-600 mb-4">
-        <span>{property.area} m²</span>
-        <span>{property.rooms} pokoje</span>
-        <span>{property.floor}. patro</span>
+
+      <div className="text-sm text-gray-600 mb-4">
+        {infoLine}
       </div>
-      
+
       <div className="flex items-center justify-between">
         <div className="text-2xl font-bold text-gradient">
-          {property.price_on_request ? 'Cena po podpisu LOI' : `${formatPrice(property.price)} Kč`}
+          {presentation.priceLabel}
         </div>
         <div className="flex space-x-2">
           {currentUser.role === 'admin' ? (

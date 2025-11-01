@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { FileText, Check, Mail, AlertCircle, Lock } from 'lucide-react'
+import ComplianceNotice from './ComplianceNotice'
 
 const API_URL = '/api'
 
@@ -115,14 +116,11 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
       }
 
       // Kód je správný - LOI podepsána
-      alert('LOI byla úspěšně podepsána a odeslána na váš email! Nyní máte přístup k detailu.')
-      
       if (onLOISigned) {
         onLOISigned()
       }
-      
-      // Zavřít modal - detail se otevře automaticky protože už má LOI
-      onClose()
+
+      setStep(4)
     } catch (error) {
       setError(error.message)
     } finally {
@@ -139,6 +137,8 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
         </div>
+
+        <ComplianceNotice className="mb-6" />
 
         {/* Krok 0: Úvodní vysvětlení */}
         {step === 0 && (
@@ -445,6 +445,27 @@ export default function LOIModal({ isOpen, onClose, entity, entityType, currentU
               <p className="text-xs text-gray-600 text-center">
                 <strong>Tip:</strong> Pokud jste kód neobdrželi, zkontrolujte složku SPAM nebo požádejte o nový kód.
               </p>
+            </div>
+          </div>
+        )}
+
+        {/* Krok 4: Úspěch */}
+        {step === 4 && (
+          <div className="space-y-6">
+            <div className="glass-card p-6 bg-green-50 border border-green-200 text-center">
+              <div className="icon-circle bg-green-100 text-green-600 mx-auto mb-4">
+                <Check className="w-8 h-8" />
+              </div>
+              <h3 className="text-2xl font-bold text-green-900 mb-2">LOI úspěšně podepsána</h3>
+              <p className="text-green-700">
+                Potvrzení bylo odesláno na váš email. Detail {entityType === 'property' ? 'nabídky' : 'poptávky'} se nyní otevře s plným přístupem.
+              </p>
+            </div>
+
+            <div className="flex justify-center">
+              <button onClick={onClose} className="glass-button rounded-full px-6">
+                Pokračovat na detail
+              </button>
             </div>
           </div>
         )}

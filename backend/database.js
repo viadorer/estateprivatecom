@@ -93,12 +93,21 @@ db.exec(`
     property_type TEXT NOT NULL,
     
     -- Provize a podmínky (nastavuje admin při schvalování)
+    commission_type TEXT,
+    commission_value REAL,
+    commission_currency TEXT,
+    commission_payer TEXT,
+    commission_vat TEXT,
     commission_rate REAL,
     commission_terms TEXT,
+    commission_base_amount REAL,
     contract_signed_at DATETIME,
     property_subtype TEXT,
     
     price REAL NOT NULL,
+    price_currency TEXT DEFAULT 'CZK',
+    price_unit TEXT DEFAULT 'total',
+    price_total REAL,
     price_note TEXT,
     price_on_request INTEGER DEFAULT 0,
     
@@ -229,8 +238,14 @@ db.exec(`
     last_confirmed_at DATETIME,
     
     -- Provize a podmínky (nastavuje admin při schvalování)
+    commission_type TEXT,
+    commission_value REAL,
+    commission_currency TEXT,
+    commission_payer TEXT,
+    commission_vat TEXT,
     commission_rate REAL,
     commission_terms TEXT,
+    commission_base_amount REAL,
     contract_signed_at DATETIME,
     
     status TEXT DEFAULT 'active',

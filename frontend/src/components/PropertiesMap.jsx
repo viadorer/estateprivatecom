@@ -106,7 +106,7 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
             white-space: nowrap;
             cursor: pointer;
           ">
-            ${formatPrice(property.price)} Kč
+            ${property.presentation?.priceLabel || formatPrice(property.price)}
           </div>
         `,
         iconSize: [120, 30],
@@ -167,14 +167,14 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
             color: #111827;
             line-height: 1.3;
           ">
-            ${property.title || 'Nemovitost'}
+            ${property.presentation?.headline || property.title || 'Nemovitost'}
           </h3>
           <div style="
             margin-bottom: 12px;
             color: #6b7280;
             font-size: 13px;
           ">
-            ${property.city}${property.district ? ', ' + property.district : ''}
+            ${property.presentation?.secondary || [property.city, property.district].filter(Boolean).join(', ')}
           </div>
           <div style="
             margin-bottom: 12px;
@@ -182,7 +182,7 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
             font-weight: 700;
             color: #3182ce;
           ">
-            ${new Intl.NumberFormat('cs-CZ').format(property.price)} Kč
+            ${property.presentation?.priceLabel || new Intl.NumberFormat('cs-CZ').format(property.price) + ' Kč'}
           </div>
           <div style="
             display: flex;
@@ -190,44 +190,32 @@ export default function PropertiesMap({ properties, onPropertyClick }) {
             gap: 6px;
             margin-bottom: 14px;
           ">
-            <span style="
-              background: ${property.transaction_type === 'sale' ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'};
-              color: white;
-              padding: 4px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: 500;
-              display: inline-flex;
-              align-items: center;
-              gap: 4px;
-            ">${getTransactionIconSVG(property.transaction_type)} ${getTransactionLabel(property.transaction_type)}</span>
-            <span style="
-              background: #e0e7ff;
-              color: #4338ca;
-              padding: 4px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: 500;
-              display: inline-flex;
-              align-items: center;
-              gap: 4px;
-            ">${getPropertyIconSVG(property.property_type)} ${getPropertyTypeLabel(property.property_type)}</span>
-            <span style="
-              background: #dbeafe;
-              color: #1e40af;
-              padding: 4px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: 500;
-            ">${property.area} m²</span>
-            ${property.rooms ? `<span style="
-              background: #d1fae5;
-              color: #065f46;
-              padding: 4px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: 500;
-            ">${property.rooms} pok.</span>` : ''}
+            ${[...(property.presentation?.list?.highlights || []), ...(property.presentation?.gridBadges || [])]
+              .slice(0, 4)
+              .map(badge => `
+                <span style="
+                  background: #ede9fe;
+                  color: #5b21b6;
+                  padding: 4px 8px;
+                  border-radius: 12px;
+                  font-size: 11px;
+                  font-weight: 500;
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                ">${badge}</span>
+              `)
+              .join('')}
+            ${property.presentation?.gridFacts?.slice(0, 2)?.map(fact => `
+              <span style="
+                background: #dbeafe;
+                color: #1e40af;
+                padding: 4px 8px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 500;
+              ">${fact}</span>
+            `).join('')}
           </div>
           <button onclick="window.openPropertyDetail(${property.id})" style="
             width: 100%;

@@ -3,7 +3,7 @@ import { Clock, FileText, Building2, Search, CheckCircle, AlertCircle, Activity 
 
 const API_URL = '/api'
 
-export default function UserHistory({ userId, userName }) {
+export default function UserHistory({ userId, userName, userRole }) {
   const [contracts, setContracts] = useState([])
   const [lois, setLois] = useState([])
   const [properties, setProperties] = useState([])
@@ -116,60 +116,53 @@ export default function UserHistory({ userId, userName }) {
                         activeTab === 'demands' ? demands.map(d => ({ ...d, type: 'demand', timestamp: d.created_at })) :
                         auditLogs.map(a => ({ ...a, type: 'log', timestamp: a.created_at }))
 
+  const counts = {
+    all: allItems.length,
+    contracts: contracts.length + lois.length,
+    properties: properties.length,
+    demands: demands.length,
+    logs: auditLogs.length
+  }
+
   return (
     <div className="glass-card p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <Clock className="w-5 h-5 text-primary-600" />
-          Historie uživatele: {userName}
-        </h3>
-        <span className="badge bg-primary-100 text-primary-700">
-          {allItems.length} záznamů
+      <div className="flex flex-col gap-2 mb-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Clock className="w-5 h-5 text-primary-600" />
+            Historie uživatele
+          </h3>
+          <p className="text-sm text-gray-500 mt-1 md:mt-0">
+            {userName}{userRole ? ` • ${userRole}` : ''}
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-2 rounded-full bg-white/70 border border-white/80 px-4 py-1 text-sm font-medium text-gray-600 shadow-sm">
+          <span className="w-2 h-2 rounded-full bg-gradient-to-r from-purple-500 to-indigo-500" />
+          {counts.all} záznamů
         </span>
       </div>
 
       {/* Filtry */}
-      <div className="flex gap-2 mb-4 flex-wrap">
-        <button
-          onClick={() => setActiveTab('all')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-            activeTab === 'all' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          Vše ({allItems.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('contracts')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-            activeTab === 'contracts' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          Smlouvy ({contracts.length + lois.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('properties')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-            activeTab === 'properties' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          Nabídky ({properties.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('demands')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-            activeTab === 'demands' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          Poptávky ({demands.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('logs')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-            activeTab === 'logs' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          Logy ({auditLogs.length})
-        </button>
+      <div className="flex flex-wrap gap-2 mb-5">
+        {[
+          { id: 'all', label: 'Vše' },
+          { id: 'contracts', label: 'Smlouvy' },
+          { id: 'properties', label: 'Nabídky' },
+          { id: 'demands', label: 'Poptávky' },
+          { id: 'logs', label: 'Logy' }
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-200 ${
+              activeTab === tab.id
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                : 'bg-white/70 border border-white/80 text-gray-600 hover:text-primary-600'
+            }`}
+          >
+            {tab.label} ({counts[tab.id]})
+          </button>
+        ))}
       </div>
 
       {/* Timeline */}

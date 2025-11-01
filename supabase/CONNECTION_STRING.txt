@@ -1,0 +1,16 @@
+Estate Private - Supabase Connection Strings
+==============================================
+
+✅ AKTUÁLNÍ KONFIGURACE
+
+Project Reference: aanxxeyysqtpdcrrwnhm
+Database Password: vApgog-cemfoc-kembu7
+
+PostgreSQL Connection:
+postgresql://postgres:vApgog-cemfoc-kembu7@db.aanxxeyysqtpdcrrwnhm.supabase.co:5432/postgres
+
+Supabase URL:
+https://aanxxeyysqtpdcrrwnhm.supabase.co
+
+Anon Key:
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhbnh4ZXl5c3F0cGRjcnJ3bmhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIwMDk1NDksImV4cCI6MjA3NzU4NTU0OX0.Zm2B5i98BILRgn_VsqwLTYUSWsMb9bs_TW0TkCNsaUo

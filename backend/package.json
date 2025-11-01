@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@supabase/supabase-js": "^2.78.0",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^9.2.2",
     "cookie-parser": "^1.4.7",
@@ -24,6 +25,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.9",
+    "pg": "^8.16.3",
     "sharp": "^0.34.4"
   }
 }

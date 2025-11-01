@@ -14,7 +14,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import db from './database.js';
 import DEV_CONFIG, { printDevConfig } from './devConfig.js';
-import { sendAccessCode, sendWelcomeEmail, sendEmail, sendRegistrationApproval } from './emailService.js';
+import { sendAccessCode, sendWelcomeEmail, sendRegistrationApproval, sendEmailFromTemplate, sendEmail } from './emailService.js';
 import { 
   notifyPropertyApproved, 
   notifyPropertyRejected, 
@@ -42,6 +42,169 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3001;
+
+const SUPPORTED_CURRENCIES = ['CZK', 'EUR', 'USD', 'BTC'];
+const DEFAULT_CURRENCY = 'CZK';
+const PRICE_UNITS = ['total', 'per_m2', 'per_m2_month', 'per_unit', 'per_unit_month'];
+const DEFAULT_PRICE_UNIT = 'total';
+
+const normalizeCurrency = (value, fallback = DEFAULT_CURRENCY) => {
+  if (!value) return fallback;
+  const upper = value.toString().trim().toUpperCase();
+  return SUPPORTED_CURRENCIES.includes(upper) ? upper : fallback;
+};
+
+const normalizePriceUnit = (value) => {
+  if (!value) return DEFAULT_PRICE_UNIT;
+  const formatted = value.toString().trim().toLowerCase();
+  return PRICE_UNITS.includes(formatted) ? formatted : DEFAULT_PRICE_UNIT;
+};
+
+const toNumberOrNull = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const calculatePriceTotal = ({ price, priceUnit, area, landArea, priceOnRequest }) => {
+  const numericPrice = toNumberOrNull(price);
+  if (priceOnRequest || numericPrice === null) return null;
+  const unit = normalizePriceUnit(priceUnit);
+  if (unit === 'per_m2' || unit === 'per_m2_month') {
+    const sourceArea = toNumberOrNull(area) ?? toNumberOrNull(landArea);
+    return sourceArea ? numericPrice * sourceArea : numericPrice;
+  }
+  return numericPrice;
+};
+
+const normalizeCommission = ({ commission_type, commission_value, commission_currency, commission_payer, commission_vat }, priceTotal, priceCurrency) => {
+  const type = commission_type ? commission_type.toString().trim() : null;
+  const value = toNumberOrNull(commission_value);
+  const currency = type === 'amount'
+    ? normalizeCurrency(commission_currency, priceCurrency || DEFAULT_CURRENCY)
+    : null;
+  const payer = commission_payer ? commission_payer.toString().trim() : null;
+  const vat = commission_vat ? commission_vat.toString().trim() : null;
+
+  let commissionRate = null;
+  if (type === 'percent' && value !== null) {
+    commissionRate = value;
+  } else if (type === 'amount' && value !== null) {
+    const base = toNumberOrNull(priceTotal);
+    if (base && base > 0) {
+      commissionRate = (value / base) * 100;
+    }
+  }
+
+  return {
+    type,
+    value,
+    currency,
+    payer,
+    vat,
+    rate: commissionRate !== null ? Number(commissionRate.toFixed(6)) : null,
+    baseAmount: priceTotal ? toNumberOrNull(priceTotal) : null
+  };
+};
+
+const formatCommissionForDisplay = ({ type, value, currency, vat, payer, rate }) => {
+  if (!type || value === null) return null;
+  if (type === 'percent') {
+    const parts = [`${value}%`];
+    if (payer) parts.push(`platí ${payer}`);
+    if (vat) parts.push(vat);
+    return parts.join(' • ');
+  }
+  const amountText = currency ? `${value} ${currency}` : `${value}`;
+  const parts = [amountText];
+  if (payer) parts.push(`platí ${payer}`);
+  if (vat) parts.push(vat);
+  if (rate !== null) parts.push(`${rate.toFixed(2)}% z ceny`);
+  return parts.join(' • ');
+};
+
+const maskCommissionFields = (entity, role) => {
+  if (!entity || role === 'admin') return entity;
+  delete entity.commission_type;
+  delete entity.commission_value;
+  delete entity.commission_currency;
+  delete entity.commission_payer;
+  delete entity.commission_vat;
+  delete entity.commission_rate;
+  delete entity.commission_terms;
+  delete entity.commission_base_amount;
+  delete entity.contract_signed_at;
+  return entity;
+};
+
+const applyPriceDefaults = (entity) => {
+  if (!entity) return entity;
+  if (!entity.price_currency) entity.price_currency = DEFAULT_CURRENCY;
+  if (!entity.price_unit) entity.price_unit = DEFAULT_PRICE_UNIT;
+  return entity;
+};
+
+const normalizeBooleanFlag = (value, defaultValue = false) => {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === '') return defaultValue;
+    if (trimmed === 'true' || trimmed === 'yes' || trimmed === 'on') return true;
+    if (trimmed === 'false' || trimmed === 'no' || trimmed === 'off') return false;
+    const numeric = Number(trimmed);
+    if (!Number.isNaN(numeric)) return numeric === 1;
+    return defaultValue;
+  }
+  if (typeof value === 'number') return value === 1;
+  return Boolean(value);
+};
+
+const getCallerRole = (req, explicitRole, fallback = 'guest') => {
+  if (explicitRole) return explicitRole.toString().toLowerCase();
+  if (req.user?.role) return req.user.role.toLowerCase();
+  if (req.body?.user_role) return req.body.user_role.toString().toLowerCase();
+  return fallback;
+};
+
+const deriveDemandBaseAmount = (propertyRequirements, commonFilters, priceMin, priceMax, explicitBase) => {
+  const explicit = toNumberOrNull(explicitBase);
+  if (explicit !== null) return explicit;
+
+  const filters = commonFilters || {};
+  const commonPrice = filters?.price;
+  if (commonPrice) {
+    const commonMax = toNumberOrNull(commonPrice.max);
+    if (commonMax !== null) return commonMax;
+    const commonMin = toNumberOrNull(commonPrice.min);
+    if (commonMin !== null) return commonMin;
+  }
+
+  if (Array.isArray(propertyRequirements)) {
+    for (const req of propertyRequirements) {
+      const reqFilters = req?.filters;
+      if (reqFilters?.price) {
+        const reqMax = toNumberOrNull(reqFilters.price.max);
+        if (reqMax !== null) return reqMax;
+        const reqMin = toNumberOrNull(reqFilters.price.min);
+        if (reqMin !== null) return reqMin;
+      }
+      if (req?.pricing) {
+        const priceMax = toNumberOrNull(req.pricing.max);
+        if (priceMax !== null) return priceMax;
+        const priceMin = toNumberOrNull(req.pricing.min);
+        if (priceMin !== null) return priceMin;
+      }
+    }
+  }
+
+  const maxCandidate = toNumberOrNull(priceMax);
+  if (maxCandidate !== null) return maxCandidate;
+
+  const minCandidate = toNumberOrNull(priceMin);
+  if (minCandidate !== null) return minCandidate;
+
+  return null;
+};
 
 // JWT Secret - vygeneruj novy pokud neni v .env
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
@@ -1192,6 +1355,13 @@ app.put('/api/users/:id', async (req, res) => {
       return res.status(400).json({ error: 'Uživatel s tímto emailem již existuje' });
     }
     
+    const currentUserRecord = db.prepare('SELECT email FROM users WHERE id = ?').get(req.params.id);
+    const effectiveEmail = email?.trim() || currentUserRecord?.email;
+
+    if (!effectiveEmail) {
+      throw new Error('Email je povinný');
+    }
+
     // Pokud je zadáno nové heslo, zahashovat ho
     let updateQuery = `
       UPDATE users SET
@@ -1268,10 +1438,16 @@ app.get('/api/properties', (req, res) => {
       rooms_min,
       rooms_max,
       status,
-      show_all // Nový parametr pro admina
+      show_all, // Nový parametr pro admina
+      userRole
     } = req.query;
 
-    let query = 'SELECT p.*, u.name as agent_name, u.phone as agent_phone, u.email as agent_email FROM properties p LEFT JOIN users u ON p.agent_id = u.id WHERE 1=1';
+    const callerRole = getCallerRole(req, userRole);
+
+    let query = `SELECT p.*, u.name as agent_name, u.phone as agent_phone, u.email as agent_email
+                 FROM properties p
+                 LEFT JOIN users u ON p.agent_id = u.id
+                 WHERE 1=1`;
     const params = [];
 
     // Filtr statusu - pokud není show_all, filtruj jen active
@@ -1299,12 +1475,12 @@ app.get('/api/properties', (req, res) => {
     }
 
     if (price_min) {
-      query += ' AND p.price >= ?';
+      query += ' AND COALESCE(p.price_total, p.price) >= ?';
       params.push(parseFloat(price_min));
     }
 
     if (price_max) {
-      query += ' AND p.price <= ?';
+      query += ' AND COALESCE(p.price_total, p.price) <= ?';
       params.push(parseFloat(price_max));
     }
 
@@ -1335,6 +1511,8 @@ app.get('/api/properties', (req, res) => {
     // Parse JSON fields
     properties.forEach(prop => {
       if (prop.images) prop.images = JSON.parse(prop.images);
+      applyPriceDefaults(prop);
+      maskCommissionFields(prop, callerRole);
     });
 
     res.json(properties);
@@ -1368,6 +1546,19 @@ app.get('/api/properties/:id', (req, res) => {
     // Parse JSON
     if (property.images) property.images = JSON.parse(property.images);
 
+    const callerRole = getCallerRole(req, req.query.userRole, 'guest');
+    applyPriceDefaults(property);
+    if (!property.price_total) {
+      property.price_total = calculatePriceTotal({
+        price: property.price,
+        priceUnit: property.price_unit,
+        area: property.area,
+        landArea: property.land_area,
+        priceOnRequest: Boolean(property.price_on_request)
+      });
+    }
+    maskCommissionFields(property, callerRole);
+
     res.json(property);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1379,7 +1570,8 @@ app.post('/api/properties', (req, res) => {
   try {
     const {
       title, description, transaction_type, property_type, property_subtype,
-      price, price_note, city, district, street, zip_code, latitude, longitude,
+      price, price_currency, price_unit, price_on_request, price_note,
+      city, district, street, zip_code, latitude, longitude,
       area, land_area, rooms, floor, total_floors,
       building_type, building_condition, ownership,
       furnished, has_balcony, has_loggia, has_terrace, has_cellar, has_garage,
@@ -1388,6 +1580,7 @@ app.post('/api/properties', (req, res) => {
       is_auction, exclusively_at_rk, attractive_offer,
       agent_id, images, main_image, documents,
       video_url, video_tour_url, matterport_url, floor_plans, website_url,
+      commission_type, commission_value, commission_currency, commission_payer, commission_vat, commission_terms, commission_rate, contract_signed_at,
       user_role, validity_days
     } = req.body;
 
@@ -1398,20 +1591,48 @@ app.post('/api/properties', (req, res) => {
     
     // Nastavit platnost - použít vlastní hodnotu nebo výchozí 14 dní
     // Pokud je 0, nastavit null (bez omezení)
-    const daysToAdd = validity_days !== undefined ? validity_days : 14
-    let validUntilStr = null
+    const daysToAdd = validity_days !== undefined ? validity_days : 14;
+    let validUntilStr = null;
     if (daysToAdd > 0) {
-      const validUntil = new Date()
-      validUntil.setDate(validUntil.getDate() + daysToAdd)
-      validUntilStr = validUntil.toISOString()
+      const validUntil = new Date();
+      validUntil.setDate(validUntil.getDate() + daysToAdd);
+      validUntilStr = validUntil.toISOString();
     }
-    const now = new Date().toISOString()
+    const now = new Date().toISOString();
+
+    const storedPrice = toNumberOrNull(price);
+    if (!storedPrice && !price_on_request) {
+      return res.status(400).json({ error: 'Cena je povinná, pokud není nastavena jako na vyžádání.' });
+    }
+
+    const normalizedPriceCurrency = normalizeCurrency(price_currency);
+    const normalizedPriceUnit = normalizePriceUnit(price_unit);
+    const priceOnRequestFlag = price_on_request ? 1 : 0;
+    const computedPriceTotal = calculatePriceTotal({
+      price: storedPrice,
+      priceUnit: normalizedPriceUnit,
+      area,
+      landArea,
+      priceOnRequest: Boolean(priceOnRequestFlag)
+    });
+
+    const normalizedCommission = normalizeCommission(
+      { commission_type, commission_value, commission_currency, commission_payer, commission_vat },
+      computedPriceTotal ?? storedPrice,
+      normalizedPriceCurrency
+    );
+
+    const finalCommissionRate = normalizedCommission.rate !== null
+      ? normalizedCommission.rate
+      : toNumberOrNull(commission_rate);
 
     const result = db.prepare(`
       INSERT INTO properties (
         title, description, transaction_type, property_type, property_subtype,
-        commission_rate, commission_terms, contract_signed_at,
-        price, price_note, city, district, street, zip_code, latitude, longitude,
+        commission_type, commission_value, commission_currency, commission_payer, commission_vat,
+        commission_rate, commission_terms, commission_base_amount, contract_signed_at,
+        price, price_currency, price_unit, price_total, price_note, price_on_request,
+        city, district, street, zip_code, latitude, longitude,
         area, land_area, rooms, floor, total_floors,
         building_type, building_condition, ownership,
         furnished, has_balcony, has_terrace, has_cellar, has_garage,
@@ -1422,11 +1643,30 @@ app.post('/api/properties', (req, res) => {
         video_url, video_tour_url, matterport_url, floor_plans, website_url,
         has_loggia, is_auction, exclusively_at_rk, attractive_offer,
         sreality_id, valid_until, last_confirmed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       title, description, transaction_type, property_type, property_subtype || null,
-      null, null, null, // commission fields - nastaví admin při schvalování
-      price, price_note || null, city, district || null, street || null, zip_code || null, latitude || null, longitude || null,
+      normalizedCommission.type || null,
+      normalizedCommission.value,
+      normalizedCommission.currency,
+      normalizedCommission.payer,
+      normalizedCommission.vat,
+      finalCommissionRate,
+      commission_terms || null,
+      normalizedCommission.baseAmount,
+      contract_signed_at || null,
+      storedPrice ?? 0,
+      normalizedPriceCurrency,
+      normalizedPriceUnit,
+      computedPriceTotal,
+      price_note || null,
+      priceOnRequestFlag,
+      city,
+      district || null,
+      street || null,
+      zip_code || null,
+      latitude || null,
+      longitude || null,
       area || null, land_area || null, rooms || null, floor || null, total_floors || null,
       building_type || null, building_condition || null, ownership || null,
       furnished || null, has_balcony || 0, has_terrace || 0, has_cellar || 0, has_garage || 0,
@@ -1445,9 +1685,11 @@ app.post('/api/properties', (req, res) => {
       now // last_confirmed_at
     );
 
-    const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(result.lastInsertRowid);
+    let property = db.prepare('SELECT * FROM properties WHERE id = ?').get(result.lastInsertRowid);
     if (property.images) property.images = JSON.parse(property.images);
     if (property.documents) property.documents = JSON.parse(property.documents);
+
+    property = maskCommissionFields(property, user_role || req.user?.role || 'guest');
 
     // Log vytvoření
     const statusNote = initialStatus === 'pending' ? ' (čeká na schválení)' : '';
@@ -1464,7 +1706,8 @@ app.put('/api/properties/:id', (req, res) => {
   try {
     const {
       title, description, transaction_type, property_type, property_subtype,
-      price, price_note, city, district, street, zip_code, latitude, longitude,
+      price, price_currency, price_unit, price_total, price_on_request, price_note,
+      city, district, street, zip_code, latitude, longitude,
       area, land_area, rooms, floor, total_floors,
       building_type, building_condition, ownership,
       furnished, has_balcony, has_loggia, has_terrace, has_cellar, has_garage,
@@ -1473,6 +1716,7 @@ app.put('/api/properties/:id', (req, res) => {
       is_auction, exclusively_at_rk, attractive_offer,
       status, images, main_image, documents,
       video_url, video_tour_url, matterport_url, floor_plans, website_url,
+      commission_type, commission_value, commission_currency, commission_payer, commission_vat, commission_terms, commission_rate, commission_base_amount, contract_signed_at,
       user_role
     } = req.body;
 
@@ -1488,42 +1732,129 @@ app.put('/api/properties/:id', (req, res) => {
       console.log(`Agent upravuje schvalenou nemovitost ${req.params.id} - status zmenen na pending_changes`);
     }
 
+    const resolveNumber = (value, fallback) => {
+      const num = toNumberOrNull(value);
+      return num !== null ? num : fallback;
+    };
+
+    const resolvedPrice = price !== undefined ? toNumberOrNull(price) : toNumberOrNull(currentProperty.price);
+    const normalizedPriceCurrency = normalizeCurrency(price_currency || currentProperty.price_currency);
+    const normalizedPriceUnit = normalizePriceUnit(price_unit || currentProperty.price_unit);
+    const priceOnRequestFlag = normalizeBooleanFlag(
+      price_on_request !== undefined ? price_on_request : currentProperty.price_on_request,
+      Boolean(currentProperty.price_on_request)
+    ) ? 1 : 0;
+
+    const resolvedArea = resolveNumber(area, toNumberOrNull(currentProperty.area));
+    const resolvedLandArea = resolveNumber(land_area, toNumberOrNull(currentProperty.land_area));
+
+    let resolvedPriceTotal = price_total !== undefined ? toNumberOrNull(price_total) : toNumberOrNull(currentProperty.price_total);
+    if (!resolvedPriceTotal) {
+      resolvedPriceTotal = calculatePriceTotal({
+        price: resolvedPrice ?? toNumberOrNull(currentProperty.price),
+        priceUnit: normalizedPriceUnit,
+        area: resolvedArea,
+        landArea: resolvedLandArea,
+        priceOnRequest: Boolean(priceOnRequestFlag)
+      });
+    }
+
+    const normalizedCommission = normalizeCommission(
+      {
+        commission_type: commission_type !== undefined ? commission_type : currentProperty.commission_type,
+        commission_value: commission_value !== undefined ? commission_value : currentProperty.commission_value,
+        commission_currency: commission_currency !== undefined ? commission_currency : currentProperty.commission_currency,
+        commission_payer: commission_payer !== undefined ? commission_payer : currentProperty.commission_payer,
+        commission_vat: commission_vat !== undefined ? commission_vat : currentProperty.commission_vat
+      },
+      resolvedPriceTotal ?? (resolvedPrice ?? toNumberOrNull(currentProperty.price)),
+      normalizedPriceCurrency
+    );
+
+    const finalCommissionRate = normalizedCommission.rate !== null
+      ? normalizedCommission.rate
+      : resolveNumber(commission_rate, toNumberOrNull(currentProperty.commission_rate));
+
+    const finalCommissionBaseAmount = normalizedCommission.baseAmount !== null
+      ? normalizedCommission.baseAmount
+      : resolveNumber(commission_base_amount, toNumberOrNull(currentProperty.commission_base_amount));
+
     db.prepare(`
       UPDATE properties SET
         title = ?, description = ?, transaction_type = ?, property_type = ?, property_subtype = ?,
-        price = ?, price_note = ?, city = ?, district = ?, street = ?, zip_code = ?, latitude = ?, longitude = ?,
+        price = ?, price_currency = ?, price_unit = ?, price_total = ?, price_note = ?, price_on_request = ?,
+        city = ?, district = ?, street = ?, zip_code = ?, latitude = ?, longitude = ?,
         area = ?, land_area = ?, rooms = ?, floor = ?, total_floors = ?,
         building_type = ?, building_condition = ?, ownership = ?,
         furnished = ?, has_balcony = ?, has_loggia = ?, has_terrace = ?, has_cellar = ?, has_garage = ?,
         has_parking = ?, has_elevator = ?, has_garden = ?, has_pool = ?,
         energy_rating = ?, heating_type = ?,
         is_auction = ?, exclusively_at_rk = ?, attractive_offer = ?,
+        commission_type = ?, commission_value = ?, commission_currency = ?, commission_payer = ?, commission_vat = ?,
+        commission_rate = ?, commission_terms = ?, commission_base_amount = ?, contract_signed_at = ?,
         status = ?, images = ?, main_image = ?, documents = ?,
         video_url = ?, video_tour_url = ?, matterport_url = ?, floor_plans = ?, website_url = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       title, description, transaction_type, property_type, property_subtype,
-      price, price_note, city, district, street, zip_code, latitude, longitude,
+      resolvedPrice ?? currentProperty.price, normalizedPriceCurrency, normalizedPriceUnit, resolvedPriceTotal,
+      price_note !== undefined ? price_note : currentProperty.price_note,
+      priceOnRequestFlag,
+      city, district, street, zip_code, latitude, longitude,
       area, land_area, rooms, floor, total_floors,
       building_type, building_condition, ownership,
-      furnished, has_balcony || 0, has_loggia || 0, has_terrace || 0, has_cellar || 0, has_garage || 0,
-      has_parking || 0, has_elevator || 0, has_garden || 0, has_pool || 0,
+      furnished,
+      normalizeBooleanFlag(has_balcony !== undefined ? has_balcony : currentProperty.has_balcony) ? 1 : 0,
+      normalizeBooleanFlag(has_loggia !== undefined ? has_loggia : currentProperty.has_loggia) ? 1 : 0,
+      normalizeBooleanFlag(has_terrace !== undefined ? has_terrace : currentProperty.has_terrace) ? 1 : 0,
+      normalizeBooleanFlag(has_cellar !== undefined ? has_cellar : currentProperty.has_cellar) ? 1 : 0,
+      normalizeBooleanFlag(has_garage !== undefined ? has_garage : currentProperty.has_garage) ? 1 : 0,
+      normalizeBooleanFlag(has_parking !== undefined ? has_parking : currentProperty.has_parking) ? 1 : 0,
+      normalizeBooleanFlag(has_elevator !== undefined ? has_elevator : currentProperty.has_elevator) ? 1 : 0,
+      normalizeBooleanFlag(has_garden !== undefined ? has_garden : currentProperty.has_garden) ? 1 : 0,
+      normalizeBooleanFlag(has_pool !== undefined ? has_pool : currentProperty.has_pool) ? 1 : 0,
       energy_rating, heating_type,
-      is_auction || 0, exclusively_at_rk || 0, attractive_offer || 0,
+      normalizeBooleanFlag(is_auction !== undefined ? is_auction : currentProperty.is_auction) ? 1 : 0,
+      normalizeBooleanFlag(exclusively_at_rk !== undefined ? exclusively_at_rk : currentProperty.exclusively_at_rk) ? 1 : 0,
+      normalizeBooleanFlag(attractive_offer !== undefined ? attractive_offer : currentProperty.attractive_offer) ? 1 : 0,
+      normalizedCommission.type || null,
+      normalizedCommission.value,
+      normalizedCommission.currency,
+      normalizedCommission.payer,
+      normalizedCommission.vat,
+      finalCommissionRate,
+      commission_terms !== undefined ? commission_terms : currentProperty.commission_terms,
+      finalCommissionBaseAmount,
+      contract_signed_at !== undefined ? contract_signed_at : currentProperty.contract_signed_at,
       finalStatus,
-      images ? JSON.stringify(images) : null,
-      main_image,
-      documents ? JSON.stringify(documents) : null,
-      video_url, video_tour_url, matterport_url,
-      floor_plans ? JSON.stringify(floor_plans) : null,
-      website_url,
+      images ? JSON.stringify(images) : (currentProperty.images || null),
+      main_image !== undefined ? main_image : currentProperty.main_image,
+      documents ? JSON.stringify(documents) : (currentProperty.documents || null),
+      video_url !== undefined ? video_url : currentProperty.video_url,
+      video_tour_url !== undefined ? video_tour_url : currentProperty.video_tour_url,
+      matterport_url !== undefined ? matterport_url : currentProperty.matterport_url,
+      floor_plans ? JSON.stringify(floor_plans) : (currentProperty.floor_plans || null),
+      website_url !== undefined ? website_url : currentProperty.website_url,
       req.params.id
     );
 
-    const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(req.params.id);
+    let property = db.prepare('SELECT * FROM properties WHERE id = ?').get(req.params.id);
     if (property.images) property.images = JSON.parse(property.images);
     if (property.documents) property.documents = JSON.parse(property.documents);
+
+    applyPriceDefaults(property);
+    if (!property.price_total) {
+      property.price_total = calculatePriceTotal({
+        price: property.price,
+        priceUnit: property.price_unit,
+        area: property.area,
+        landArea: property.land_area,
+        priceOnRequest: Boolean(property.price_on_request)
+      });
+    }
+
+    property = maskCommissionFields(property, user_role || req.user?.role || 'guest');
 
     // Log úpravy
     logAction(req.body.agent_id || property.agent_id, 'update', 'property', req.params.id, `Upravena nemovitost: ${title}`, req);
@@ -1652,34 +1983,40 @@ app.post('/api/properties/:id/approve', authenticateToken, requireRole('admin'),
   }
 });
 
-// ==================== DEMANDS ====================
-
 // Získat všechny poptávky
 app.get('/api/demands', (req, res) => {
   try {
-    const { agentId, show_all, status, userRole } = req.query;
-    
-    let query = `
-      SELECT d.*, u.name as client_name, u.email as client_email, u.phone as client_phone
+    const {
+      transaction_type,
+      property_type,
+      client_id,
+      agentId,
+      status,
+      show_all,
+      userRole
+    } = req.query;
+
+    const callerRole = getCallerRole(req, userRole);
+
+    let query = `SELECT d.*, u.name as client_name, u.email as client_email, u.phone as client_phone
       FROM demands d
       LEFT JOIN users u ON d.client_id = u.id
-      WHERE 1=1
-    `;
+      WHERE 1=1`;
     
     const params = [];
     
     // Admin vidí vše
     // Agent vidí všechny aktivní poptávky (stejně jako u properties)
     // Klient vidí pouze své
-    if (userRole === 'client' && agentId && show_all !== 'true') {
+    if (callerRole === 'client' && agentId && show_all !== 'true') {
       query += ' AND d.client_id = ?';
       params.push(agentId);
-    } else if (userRole === 'agent') {
-      // Agent vidí všechny aktivní poptávky
-      query += ' AND d.status = "active"';
+    } else if (callerRole === 'agent') {
+      // Agent vidí všechny poptávky kromě zrušených
+      query += " AND d.status != 'cancelled'";
     }
     
-    if (status && userRole !== 'agent') {
+    if (status && callerRole !== 'agent') {
       query += ' AND d.status = ?';
       params.push(status);
     }
@@ -1704,7 +2041,7 @@ app.get('/api/demands', (req, res) => {
       }
       
       // Agent nevidí kontaktní údaje - musí požádat o přístup
-      if (userRole === 'agent') {
+      if (callerRole === 'agent') {
         delete demand.client_name;
         delete demand.client_email;
         delete demand.client_phone;
@@ -1716,6 +2053,7 @@ app.get('/api/demands', (req, res) => {
           }));
         }
       }
+      maskCommissionFields(demand, callerRole);
     });
 
     res.json(demands);
@@ -1755,8 +2093,10 @@ app.get('/api/demands/:id', (req, res) => {
     if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
     if (demand.locations) demand.locations = JSON.parse(demand.locations);
     
+    const callerRole = getCallerRole(req, req.query.userRole, 'guest');
+
     // Agent nevidí kontaktní údaje - musí požádat o přístup
-    if (req.query.userRole === 'agent') {
+    if (callerRole === 'agent') {
       delete demand.client_name;
       delete demand.client_email;
       delete demand.client_phone;
@@ -1768,6 +2108,8 @@ app.get('/api/demands/:id', (req, res) => {
         }));
       }
     }
+
+    maskCommissionFields(demand, callerRole);
 
     res.json(demand);
   } catch (error) {
@@ -1789,7 +2131,8 @@ app.post('/api/demands', (req, res) => {
       price_min, price_max, cities, districts,
       area_min, area_max, rooms_min, rooms_max,
       floor_min, floor_max, required_features, 
-      email_notifications, user_role, validity_days
+      email_notifications, user_role, validity_days,
+      commission_type, commission_value, commission_currency, commission_payer, commission_vat, commission_terms, commission_rate, commission_base_amount, contract_signed_at
     } = req.body;
 
     // Určení statusu podle role:
@@ -1812,14 +2155,27 @@ app.post('/api/demands', (req, res) => {
     if (property_requirements && property_requirements.length > 0) {
       // Pro zpětnou kompatibilitu nastavit transaction_type a property_type z prvního požadavku
       const firstReq = property_requirements[0];
-      
+      const computedBaseAmount = deriveDemandBaseAmount(property_requirements, common_filters, price_min, price_max, commission_base_amount);
+      const normalizedCommission = normalizeCommission(
+        { commission_type, commission_value, commission_currency, commission_payer, commission_vat },
+        computedBaseAmount,
+        commission_currency
+      );
+
+      const finalCommissionRate = normalizedCommission.rate !== null ? normalizedCommission.rate : toNumberOrNull(commission_rate);
+      const finalCommissionBaseAmount = normalizedCommission.baseAmount !== null
+        ? normalizedCommission.baseAmount
+        : (toNumberOrNull(commission_base_amount) ?? (computedBaseAmount !== null ? toNumberOrNull(computedBaseAmount) : null));
+
       // Jedna poptávka s více konfiguracemi typů nemovitostí
       const result = db.prepare(`
         INSERT INTO demands (
           client_id, transaction_type, property_type, property_subtype,
           property_requirements, common_filters, locations,
+          commission_type, commission_value, commission_currency, commission_payer, commission_vat,
+          commission_rate, commission_terms, commission_base_amount, contract_signed_at,
           email_notifications, status, valid_until, last_confirmed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         client_id,
         firstReq.transaction_type || 'sale',
@@ -1828,16 +2184,27 @@ app.post('/api/demands', (req, res) => {
         JSON.stringify(property_requirements),
         JSON.stringify(common_filters || {}),
         JSON.stringify(req.body.locations || []),
+        normalizedCommission.type || null,
+        normalizedCommission.value,
+        normalizedCommission.currency,
+        normalizedCommission.payer,
+        normalizedCommission.vat,
+        finalCommissionRate,
+        commission_terms || null,
+        finalCommissionBaseAmount,
+        contract_signed_at || null,
         email_notifications !== undefined ? email_notifications : 1,
         initialStatus,
         validUntilStr,
         now
       );
 
-      const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
+      let demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
       if (demand.property_requirements) demand.property_requirements = JSON.parse(demand.property_requirements);
       if (demand.common_filters) demand.common_filters = JSON.parse(demand.common_filters);
       if (demand.locations) demand.locations = JSON.parse(demand.locations);
+
+      maskCommissionFields(demand, user_role || req.user?.role || 'guest');
 
       const typesStr = property_requirements.map(r => `${r.transaction_type} ${r.property_type}`).join(', ');
       const statusNote = initialStatus === 'pending' ? ' (čeká na schválení)' : '';
@@ -1854,14 +2221,29 @@ app.post('/api/demands', (req, res) => {
 
       for (const transType of transactionTypesToCreate) {
         for (const propType of propertyTypesToCreate) {
+          const computedBaseAmount = deriveDemandBaseAmount(null, null, price_min, price_max, commission_base_amount);
+          const normalizedCommission = normalizeCommission(
+            { commission_type, commission_value, commission_currency, commission_payer, commission_vat },
+            computedBaseAmount,
+            commission_currency
+          );
+
+          const finalCommissionRate = normalizedCommission.rate !== null ? normalizedCommission.rate : toNumberOrNull(commission_rate);
+          const finalCommissionBaseAmount = normalizedCommission.baseAmount !== null
+            ? normalizedCommission.baseAmount
+            : (toNumberOrNull(commission_base_amount) ?? (computedBaseAmount !== null ? toNumberOrNull(computedBaseAmount) : null));
+
           const result = db.prepare(`
             INSERT INTO demands (
               client_id, transaction_type, property_type, property_subtype,
               price_min, price_max, cities, districts,
               area_min, area_max, rooms_min, rooms_max,
-              floor_min, floor_max, required_features, email_notifications, status,
+              floor_min, floor_max, required_features,
+              commission_type, commission_value, commission_currency, commission_payer, commission_vat,
+              commission_rate, commission_terms, commission_base_amount, contract_signed_at,
+              email_notifications, status,
               valid_until, last_confirmed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             client_id, transType, propType, property_subtype,
             price_min, price_max,
@@ -1870,16 +2252,27 @@ app.post('/api/demands', (req, res) => {
             area_min, area_max, rooms_min, rooms_max,
             floor_min, floor_max,
             required_features ? JSON.stringify(required_features) : null,
+            normalizedCommission.type || null,
+            normalizedCommission.value,
+            normalizedCommission.currency,
+            normalizedCommission.payer,
+            normalizedCommission.vat,
+            finalCommissionRate,
+            commission_terms || null,
+            finalCommissionBaseAmount,
+            contract_signed_at || null,
             email_notifications !== undefined ? email_notifications : 1,
             initialStatus,
             validUntilStr,
             now
           );
 
-          const demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
+          let demand = db.prepare('SELECT * FROM demands WHERE id = ?').get(result.lastInsertRowid);
           if (demand.cities) demand.cities = JSON.parse(demand.cities);
           if (demand.districts) demand.districts = JSON.parse(demand.districts);
           if (demand.required_features) demand.required_features = JSON.parse(demand.required_features);
+
+          maskCommissionFields(demand, user_role || req.user?.role || 'guest');
 
           createdDemands.push(demand);
 
@@ -3542,8 +3935,10 @@ app.post('/api/loi/sign', async (req, res) => {
         contractText = template.template_content;
         contractText = contractText.replace(/{{user_name}}/g, user.name || '');
         contractText = contractText.replace(/{{user_email}}/g, user.email || '');
-        contractText = contractText.replace(/{{user_company}}/g, user.company ? `Firma: ${user.company}` : '');
-        contractText = contractText.replace(/{{user_ico}}/g, user.ico ? `IČO: ${user.ico}` : '');
+        const companyLine = user.company_name ? `Firma: ${user.company_name}` : (user.company ? `Firma: ${user.company}` : '');
+        const icoLine = user.company_ico ? `IČO: ${user.company_ico}` : (user.ico ? `IČO: ${user.ico}` : '');
+        contractText = contractText.replace(/{{user_company}}/g, companyLine);
+        contractText = contractText.replace(/{{user_ico}}/g, icoLine);
         contractText = contractText.replace(/{{entity_type}}/g, entity_type === 'property' ? 'nabídce nemovitosti' : 'poptávce');
         contractText = contractText.replace(/{{entity_name}}/g, entityName);
         contractText = contractText.replace(/{{signature_date}}/g, new Date().toLocaleDateString('cs-CZ'));
@@ -4631,8 +5026,10 @@ app.post('/api/auth/verify-loi-code', async (req, res) => {
         contractText = template.template_content;
         contractText = contractText.replace(/{{user_name}}/g, user.name || '');
         contractText = contractText.replace(/{{user_email}}/g, user.email || '');
-        contractText = contractText.replace(/{{user_company}}/g, user.company ? `Firma: ${user.company}` : '');
-        contractText = contractText.replace(/{{user_ico}}/g, user.ico ? `IČO: ${user.ico}` : '');
+        const companyLine = user.company_name ? `Firma: ${user.company_name}` : (user.company ? `Firma: ${user.company}` : '');
+        const icoLine = user.company_ico ? `IČO: ${user.company_ico}` : (user.ico ? `IČO: ${user.ico}` : '');
+        contractText = contractText.replace(/{{user_company}}/g, companyLine);
+        contractText = contractText.replace(/{{user_ico}}/g, icoLine);
         contractText = contractText.replace(/{{entity_type}}/g, entityType === 'property' ? 'nabídce nemovitosti' : 'poptávce');
         contractText = contractText.replace(/{{entity_name}}/g, entityName);
         contractText = contractText.replace(/{{signature_date}}/g, new Date().toLocaleDateString('cs-CZ'));

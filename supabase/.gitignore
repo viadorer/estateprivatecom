@@ -1,0 +1,12 @@
+# Supabase
+.branches
+.temp
+exports/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Logs
+*.log

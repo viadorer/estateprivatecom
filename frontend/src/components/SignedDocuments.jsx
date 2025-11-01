@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { FileText, Eye, Download, CheckCircle } from 'lucide-react'
+import ComplianceNotice from './ComplianceNotice'
 
 const API_URL = '/api'
 
@@ -95,6 +96,7 @@ export default function SignedDocuments({ userId, userRole }) {
 
   return (
     <>
+      <ComplianceNotice className="mb-6" />
       <div className="glass-card p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
