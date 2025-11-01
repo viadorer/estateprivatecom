@@ -47,6 +47,35 @@ const allowedOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL ||
   .map(origin => origin.trim())
   .filter(Boolean);
 
+const allowedPatterns = (process.env.FRONTEND_URL_PATTERNS || '')
+  .split(',')
+  .map(pattern => pattern.trim())
+  .filter(Boolean);
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname.endsWith('.vercel.app')) {
+      return true;
+    }
+    return allowedPatterns.some((pattern) => {
+      if (!pattern) return false;
+      if (pattern.startsWith('*.')) {
+        const suffix = pattern.slice(1); // remove leading '*'
+        return hostname.endsWith(suffix);
+      }
+      return hostname === pattern;
+    });
+  } catch (error) {
+    console.warn(`[CORS] Invalid origin format: ${origin}`);
+  }
+
+  return false;
+};
+
 const SUPPORTED_CURRENCIES = ['CZK', 'EUR', 'USD', 'BTC'];
 const DEFAULT_CURRENCY = 'CZK';
 const PRICE_UNITS = ['total', 'per_m2', 'per_m2_month', 'per_unit', 'per_unit_month'];
@@ -229,7 +258,7 @@ app.use(helmet({
 // CORS s credentials
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
     return callback(new Error(`CORS blocked for origin: ${origin}`));
