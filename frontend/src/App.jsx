@@ -153,7 +153,11 @@ const buildPropertyPresentation = (property, labels = LABELS_CS) => {
   }
 }
 
-const API_URL = 'http://localhost:3001/api'
+const API_URL = (
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.REACT_APP_API_URL ||
+  'http://localhost:3001/api'
+)
 const MAPY_API_KEY = 'MTIdGpXVtxteHwipIwRw1MyH8f4IWYNgTyppp75Vp54'
 
 function App() {
