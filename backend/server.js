@@ -42,6 +42,10 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
+const allowedOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || 'http://localhost:3000')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
 const SUPPORTED_CURRENCIES = ['CZK', 'EUR', 'USD', 'BTC'];
 const DEFAULT_CURRENCY = 'CZK';
@@ -224,7 +228,12 @@ app.use(helmet({
 
 // CORS s credentials
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true
 }));
 
